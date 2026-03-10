@@ -1,16 +1,16 @@
 @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap");
 
 :root {
-  color-scheme: light;
-  --ink: #111111;
-  --muted: #5f5f5f;
-  --accent: #2f7df6;
-  --accent-strong: #0c4fe3;
-  --panel: rgba(255, 255, 255, 0.86);
-  --shadow: 0 25px 50px rgba(15, 15, 15, 0.18);
-  --success: #2a9d6f;
-  --warning: #f2b646;
-  --danger: #e04848;
+  color-scheme: dark;
+  --ink: #f5f7fb;
+  --muted: #9aa3b2;
+  --accent: #5aa3ff;
+  --accent-strong: #3a7bff;
+  --panel: rgba(16, 20, 30, 0.92);
+  --shadow: 0 25px 50px rgba(2, 6, 12, 0.55);
+  --success: #3ccf91;
+  --warning: #f5c04f;
+  --danger: #ff6b6b;
 }
 
 * {
@@ -20,7 +20,7 @@
 body {
   margin: 0;
   font-family: "Space Grotesk", "Segoe UI", sans-serif;
-  background: radial-gradient(circle at 15% 20%, #f2f6ff, #f9f5ef 40%, #f4f0ff 90%);
+  background: radial-gradient(circle at 15% 20%, #101726, #0b0f18 45%, #06080e 90%);
   color: var(--ink);
   min-height: 100vh;
 }
@@ -98,6 +98,7 @@ h1 {
   border-radius: 24px;
   padding: 24px;
   box-shadow: var(--shadow);
+  border: 1px solid rgba(90, 115, 160, 0.2);
 }
 
 .panel-head {
@@ -143,7 +144,7 @@ h2 {
 }
 
 .secondary {
-  background: rgba(17, 17, 17, 0.08);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--ink);
 }
 
@@ -153,7 +154,7 @@ h2 {
 }
 
 .tab {
-  background: rgba(17, 17, 17, 0.08);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--ink);
 }
 
@@ -181,7 +182,7 @@ h2 {
 }
 
 .alert {
-  background: rgba(224, 72, 72, 0.1);
+  background: rgba(255, 107, 107, 0.12);
   border-radius: 16px;
   padding: 16px;
   color: var(--danger);
@@ -195,7 +196,7 @@ h2 {
 }
 
 .engine {
-  background: white;
+  background: rgba(8, 12, 20, 0.9);
   border-radius: 20px;
   padding: 18px;
   border: 2px solid transparent;
@@ -208,7 +209,7 @@ h2 {
 
 .engine:hover {
   transform: translateY(-2px);
-  border-color: rgba(47, 125, 246, 0.4);
+  border-color: rgba(90, 163, 255, 0.4);
 }
 
 .engine h3 {
@@ -237,7 +238,7 @@ h2 {
   padding: 4px 10px;
   border-radius: 999px;
   font-size: 0.75rem;
-  background: rgba(17, 17, 17, 0.08);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .engine-actions {
@@ -260,7 +261,7 @@ h2 {
 
 .logs,
 .history {
-  background: rgba(17, 17, 17, 0.04);
+  background: rgba(255, 255, 255, 0.05);
   border-radius: 16px;
   padding: 16px;
   min-height: 200px;
@@ -288,7 +289,9 @@ h2 {
   margin-left: 8px;
   padding: 6px 10px;
   border-radius: 10px;
-  border: 1px solid rgba(17, 17, 17, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(8, 12, 20, 0.9);
+  color: var(--ink);
 }
 
 .history-grid {
@@ -298,7 +301,7 @@ h2 {
 }
 
 .history-card {
-  background: white;
+  background: rgba(8, 12, 20, 0.9);
   border-radius: 16px;
   padding: 16px;
   box-shadow: 0 12px 20px rgba(15, 15, 15, 0.08);
@@ -323,8 +326,9 @@ h2 {
 .config-toolbar select {
   padding: 8px 12px;
   border-radius: 12px;
-  border: 1px solid rgba(17, 17, 17, 0.2);
-  background: white;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(8, 12, 20, 0.9);
+  color: var(--ink);
 }
 
 .config-grid {
@@ -340,7 +344,7 @@ h2 {
 }
 
 .config-card {
-  background: white;
+  background: rgba(8, 12, 20, 0.9);
   border-radius: 18px;
   padding: 16px;
   display: flex;
@@ -366,7 +370,7 @@ h2 {
 }
 
 .config-form {
-  background: white;
+  background: rgba(8, 12, 20, 0.9);
   border-radius: 18px;
   padding: 18px;
   display: flex;
@@ -392,9 +396,11 @@ h2 {
 .config-form textarea {
   padding: 8px 10px;
   border-radius: 12px;
-  border: 1px solid rgba(17, 17, 17, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.15);
   font-family: inherit;
   font-size: 0.95rem;
+  background: rgba(8, 12, 20, 0.9);
+  color: var(--ink);
 }
 
 .config-form textarea {
@@ -433,7 +439,7 @@ h2 {
 }
 
 .host-card {
-  background: white;
+  background: rgba(8, 12, 20, 0.9);
   border-radius: 18px;
   padding: 16px;
   display: flex;
@@ -459,7 +465,7 @@ h2 {
 }
 
 .host-form {
-  background: white;
+  background: rgba(8, 12, 20, 0.9);
   border-radius: 18px;
   padding: 18px;
   display: flex;
@@ -483,9 +489,11 @@ h2 {
 .host-form input {
   padding: 8px 10px;
   border-radius: 12px;
-  border: 1px solid rgba(17, 17, 17, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.15);
   font-family: inherit;
   font-size: 0.95rem;
+  background: rgba(8, 12, 20, 0.9);
+  color: var(--ink);
 }
 
 @media (max-width: 720px) {
