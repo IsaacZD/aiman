@@ -32,9 +32,9 @@ The host keeps configs in `AIMAN_CONFIG_STORE` and the dashboard can add/update/
 
 ## Quickstart (Dashboard)
 ```bash
-pnpm --dir dashboard install
-pnpm --dir dashboard build
-pnpm --dir dashboard run server
+npm --prefix dashboard install
+npm --prefix dashboard run build
+npm --prefix dashboard run serve
 ```
 
 Open the UI at `http://<NAS_IP>:4020` and add hosts from the Hosts panel. If you want to seed hosts on first launch, set `AIMAN_HOSTS_CONFIG` to a `hosts.toml` path.
@@ -42,7 +42,7 @@ Open the UI at `http://<NAS_IP>:4020` and add hosts from the Hosts panel. If you
 ## Development
 - Build Rust workspace: `cargo build`
 - Run host: `cargo run -p aiman-host`
-- Run UI dev server: `pnpm --dir dashboard dev`
+- Run UI dev server: `npm --prefix dashboard run dev`
 
 ## Notes
 - Host API uses Axum 0.8 route params: `/v1/engines/{id}`.
@@ -54,4 +54,33 @@ Enter the dev shell:
 ```bash
 nix develop
 ```
-This provides Rust, Node.js, and pnpm.
+This provides Rust and Node.js.
+
+### Packages
+- `packages.aiman-host` builds the host binary.
+- `packages.aiman-dashboard` builds the dashboard server + UI (uses `buildNpmPackage`).
+
+If the dashboard build fails due to `npmDepsHash`, replace the placeholder hash in `nix/aiman-dashboard.nix` with the value printed by Nix.
+
+### NixOS Modules
+Enable the services and overlay in your system config:
+```nix
+{
+  nixpkgs.overlays = [ inputs.aiman.overlays.default ];
+
+  services.aiman-host = {
+    enable = true;
+    apiKey = "dev-secret";
+    openFirewall = true;
+  };
+
+  services.aiman-dashboard = {
+    enable = true;
+    openFirewall = true;
+  };
+}
+```
+
+Key options:
+- Host: `services.aiman-host.dataDir`, `configStore`, `seedConfig`, `bind`, `apiKey`.
+- Dashboard: `services.aiman-dashboard.hostsStore`, `hostsConfig`, `bind`, `port`.

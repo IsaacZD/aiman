@@ -12,10 +12,10 @@
 ## Build, Test, and Development Commands
 - `cargo build` — Build the Rust workspace.
 - `cargo run -p aiman-host` — Run the host API locally.
-- `pnpm --dir dashboard install` — Install dashboard dependencies.
-- `pnpm --dir dashboard dev` — Run the Vite UI dev server.
-- `pnpm --dir dashboard build` — Build the production UI assets.
-- `pnpm --dir dashboard serve` — Run the dashboard Fastify server.
+- `npm --prefix dashboard install` — Install dashboard dependencies.
+- `npm --prefix dashboard run dev` — Run the Vite UI dev server.
+- `npm --prefix dashboard run build` — Build the production UI assets.
+- `npm --prefix dashboard run serve` — Run the dashboard Fastify server.
 
 ## Coding Style & Naming Conventions
 - Rust: follow `rustfmt` defaults; use `snake_case` for functions and `CamelCase` for types.

@@ -2,7 +2,7 @@ agent:
   cargo r
 
 build-webui:
-  pnpm --dir dashboard build
+  npm --prefix dashboard run build
 
 webui: build-webui
-  pnpm --dir dashboard serve
+  npm --prefix dashboard run serve

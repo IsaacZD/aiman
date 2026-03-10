@@ -6,6 +6,7 @@
 /dashboard/node_modules
 /dashboard/dist
 /dashboard/.vite
+/dashboard/.npm
 
 # direnv
 .direnv
