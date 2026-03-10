@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import websocketPlugin from "@fastify/websocket";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import toml from "toml";
@@ -26,6 +26,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../../..");
 const configPath = process.env.AIMAN_HOSTS_CONFIG ?? path.join(repoRoot, "configs", "hosts.toml");
+const hostsStorePath =
+  process.env.AIMAN_HOSTS_STORE ?? path.join(repoRoot, "data", "hosts.json");
 const uiDir = path.resolve(__dirname, "../../dist/ui");
 
 server.register(websocketPlugin);
@@ -36,6 +38,60 @@ server.get("/health", async () => ({ status: "ok" }));
 server.get("/api/hosts", async () => {
   const hosts = await loadHosts();
   return { hosts };
+});
+
+// Create a new host entry in the store.
+server.post("/api/hosts", async (request, reply) => {
+  const payload = request.body as Partial<HostConfig>;
+  const validation = validateHost(payload);
+  if (!validation.ok) {
+    return reply.code(400).send({ error: validation.error });
+  }
+
+  const hosts = await loadHosts();
+  if (hosts.some((host) => host.id === payload.id)) {
+    return reply.code(409).send({ error: "host already exists" });
+  }
+
+  const next = [...hosts, payload as HostConfig];
+  await persistHosts(next);
+  return reply.code(201).send({ host: payload });
+});
+
+// Update an existing host entry.
+server.put("/api/hosts/:hostId", async (request, reply) => {
+  const { hostId } = request.params as { hostId: string };
+  const payload = request.body as Partial<HostConfig>;
+  const validation = validateHost(payload);
+  if (!validation.ok) {
+    return reply.code(400).send({ error: validation.error });
+  }
+  if (payload.id !== hostId) {
+    return reply.code(400).send({ error: "host id mismatch" });
+  }
+
+  const hosts = await loadHosts();
+  const index = hosts.findIndex((host) => host.id === hostId);
+  if (index === -1) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+
+  const next = [...hosts];
+  next[index] = payload as HostConfig;
+  await persistHosts(next);
+  return reply.code(200).send({ host: payload });
+});
+
+// Delete a host entry from the store.
+server.delete("/api/hosts/:hostId", async (request, reply) => {
+  const { hostId } = request.params as { hostId: string };
+  const hosts = await loadHosts();
+  const next = hosts.filter((host) => host.id !== hostId);
+  if (next.length === hosts.length) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+  await persistHosts(next);
+  return reply.code(200).send({ ok: true });
 });
 
 // Aggregate engine lists across all configured hosts.
@@ -215,9 +271,27 @@ server.listen({ port, host }).catch((err) => {
 
 // Load hosts from TOML config file.
 async function loadHosts(): Promise<HostConfig[]> {
-  const raw = await readFile(configPath, "utf8");
-  const data = toml.parse(raw) as HostsFile;
-  return Array.isArray(data.host) ? data.host : [];
+  try {
+    const raw = await readFile(hostsStorePath, "utf8");
+    if (!raw.trim()) {
+      return [];
+    }
+    const parsed = JSON.parse(raw) as HostConfig[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    // Fallback to TOML if no JSON store exists yet.
+    try {
+      const raw = await readFile(configPath, "utf8");
+      const data = toml.parse(raw) as HostsFile;
+      const hosts = Array.isArray(data.host) ? data.host : [];
+      if (hosts.length) {
+        await persistHosts(hosts);
+      }
+      return hosts;
+    } catch {
+      return [];
+    }
+  }
 }
 
 // Find a host by ID.
@@ -233,4 +307,26 @@ async function safeJson(res: Response) {
   } catch {
     return null;
   }
+}
+
+async function persistHosts(hosts: HostConfig[]) {
+  const dir = path.dirname(hostsStorePath);
+  await mkdir(dir, { recursive: true });
+  await writeFile(hostsStorePath, JSON.stringify(hosts, null, 2));
+}
+
+function validateHost(payload: Partial<HostConfig>) {
+  if (!payload.id?.trim()) {
+    return { ok: false, error: "id is required" };
+  }
+  if (!payload.name?.trim()) {
+    return { ok: false, error: "name is required" };
+  }
+  if (!payload.base_url?.trim()) {
+    return { ok: false, error: "base_url is required" };
+  }
+  if (!payload.api_key?.trim()) {
+    return { ok: false, error: "api_key is required" };
+  }
+  return { ok: true };
 }

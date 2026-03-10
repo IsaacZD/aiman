@@ -420,6 +420,74 @@ h2 {
   justify-content: flex-end;
 }
 
+.host-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(280px, 1fr);
+  gap: 20px;
+}
+
+.host-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.host-card {
+  background: white;
+  border-radius: 18px;
+  padding: 16px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  box-shadow: 0 12px 20px rgba(15, 15, 15, 0.08);
+}
+
+.host-card h3 {
+  margin: 0 0 6px;
+}
+
+.host-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.host-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.host-form {
+  background: white;
+  border-radius: 18px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 12px 20px rgba(15, 15, 15, 0.08);
+}
+
+.host-form h3 {
+  margin: 0 0 6px;
+}
+
+.host-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.host-form input {
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(17, 17, 17, 0.2);
+  font-family: inherit;
+  font-size: 0.95rem;
+}
+
 @media (max-width: 720px) {
   .page {
     padding: 40px 20px 80px;
@@ -445,5 +513,9 @@ h2 {
   .config-toolbar {
     width: 100%;
     flex-wrap: wrap;
+  }
+
+  .host-grid {
+    grid-template-columns: 1fr;
   }
 }

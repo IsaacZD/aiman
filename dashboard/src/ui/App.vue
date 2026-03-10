@@ -23,6 +23,7 @@
           <p class="panel-sub">{{ engines.length }} configured engine(s)</p>
         </div>
         <div class="panel-actions">
+          <button class="secondary" @click="scrollToHosts">Manage hosts</button>
           <button class="secondary" @click="scrollToConfigs">Manage configs</button>
           <button class="primary" @click="refreshAll" :disabled="loading">
             {{ loading ? "Refreshing..." : "Refresh" }}
@@ -56,6 +57,63 @@
             <button class="ghost" @click.stop="stopEngine(engine)">Stop</button>
           </div>
         </article>
+      </div>
+    </section>
+
+    <section class="panel" id="hosts">
+      <div class="panel-head">
+        <div>
+          <h2>Hosts</h2>
+          <p class="panel-sub">Add or update LLM servers the dashboard should control.</p>
+        </div>
+        <div class="panel-actions">
+          <button class="secondary" @click="resetHostForm">New host</button>
+        </div>
+      </div>
+
+      <div v-if="hostErrors.length" class="alert">
+        <p v-for="error in hostErrors" :key="error">{{ error }}</p>
+      </div>
+
+      <div class="host-grid">
+        <div class="host-list">
+          <article v-for="host in hosts" :key="host.id" class="host-card">
+            <div>
+              <h3>{{ host.name }}</h3>
+              <p class="host-meta">{{ host.id }} • {{ host.base_url }}</p>
+            </div>
+            <div class="host-actions">
+              <button class="secondary" @click="editHost(host)">Edit</button>
+              <button class="ghost" @click="deleteHost(host)">Delete</button>
+            </div>
+          </article>
+          <p v-if="!hosts.length" class="empty">No hosts yet.</p>
+        </div>
+
+        <form class="host-form" @submit.prevent="saveHost">
+          <h3>{{ hostMode === "create" ? "Create host" : "Edit host" }}</h3>
+          <label>
+            Host ID
+            <input v-model="hostForm.id" type="text" placeholder="llm-01" />
+          </label>
+          <label>
+            Name
+            <input v-model="hostForm.name" type="text" placeholder="LLM Server 01" />
+          </label>
+          <label>
+            Base URL
+            <input v-model="hostForm.base_url" type="text" placeholder="http://10.0.0.12:4010" />
+          </label>
+          <label>
+            API key
+            <input v-model="hostForm.api_key" type="password" placeholder="dev-secret" />
+          </label>
+          <div class="config-submit">
+            <button class="primary" type="submit">
+              {{ hostMode === "create" ? "Create" : "Save changes" }}
+            </button>
+          </div>
+        </form>
       </div>
     </section>
 
@@ -296,6 +354,9 @@ const configs = ref<EngineConfig[]>([]);
 const configErrors = ref<string[]>([]);
 const configMode = ref<"create" | "edit">("create");
 const configForm = ref(createEmptyConfigForm());
+const hostErrors = ref<string[]>([]);
+const hostMode = ref<"create" | "edit">("create");
+const hostForm = ref(createEmptyHostForm());
 
 let ws: WebSocket | null = null;
 
@@ -307,6 +368,9 @@ async function refreshAll() {
     const hostsRes = await fetch("/api/hosts");
     const hostsBody = (await hostsRes.json()) as { hosts: Host[] };
     hosts.value = hostsBody.hosts ?? [];
+    if (hosts.value.length && hostMode.value === "create" && !hostForm.value.id) {
+      hostForm.value = createEmptyHostForm();
+    }
 
     const enginesRes = await fetch("/api/engines");
     const enginesBody = (await enginesRes.json()) as { results: EnginesResult[] };
@@ -431,6 +495,19 @@ function scrollToConfigs() {
   document.getElementById("configs")?.scrollIntoView({ behavior: "smooth" });
 }
 
+function scrollToHosts() {
+  document.getElementById("hosts")?.scrollIntoView({ behavior: "smooth" });
+}
+
+function createEmptyHostForm() {
+  return {
+    id: "",
+    name: "",
+    base_url: "",
+    api_key: ""
+  };
+}
+
 function createEmptyConfigForm() {
   return {
     id: "",
@@ -465,6 +542,83 @@ async function loadConfigs() {
   } catch (err) {
     configErrors.value = [(err as Error).message];
   }
+}
+
+function resetHostForm() {
+  hostMode.value = "create";
+  hostForm.value = createEmptyHostForm();
+}
+
+function editHost(host: Host) {
+  hostMode.value = "edit";
+  hostForm.value = {
+    id: host.id,
+    name: host.name,
+    base_url: host.base_url,
+    api_key: host.api_key
+  };
+}
+
+async function saveHost() {
+  hostErrors.value = [];
+  if (!hostForm.value.id.trim()) {
+    hostErrors.value = ["Host ID is required."];
+    return;
+  }
+  if (!hostForm.value.name.trim()) {
+    hostErrors.value = ["Host name is required."];
+    return;
+  }
+  if (!hostForm.value.base_url.trim()) {
+    hostErrors.value = ["Base URL is required."];
+    return;
+  }
+  if (!hostForm.value.api_key.trim()) {
+    hostErrors.value = ["API key is required."];
+    return;
+  }
+
+  const payload = {
+    id: hostForm.value.id.trim(),
+    name: hostForm.value.name.trim(),
+    base_url: hostForm.value.base_url.trim(),
+    api_key: hostForm.value.api_key.trim()
+  };
+
+  const method = hostMode.value === "create" ? "POST" : "PUT";
+  const url =
+    hostMode.value === "create"
+      ? "/api/hosts"
+      : `/api/hosts/${encodeURIComponent(payload.id)}`;
+
+  const res = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    hostErrors.value = [
+      body?.error ? `Save failed: ${body.error}` : `Save failed (HTTP ${res.status}).`
+    ];
+    return;
+  }
+
+  resetHostForm();
+  await refreshAll();
+}
+
+async function deleteHost(host: Host) {
+  if (!confirm(`Delete host ${host.name}?`)) {
+    return;
+  }
+  const res = await fetch(`/api/hosts/${encodeURIComponent(host.id)}`, { method: "DELETE" });
+  if (!res.ok) {
+    hostErrors.value = [`Delete failed (HTTP ${res.status}).`];
+    return;
+  }
+  await refreshAll();
 }
 
 function resetConfigForm() {

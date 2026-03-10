@@ -1,5 +1,8 @@
 agent:
   cargo r
 
-webui:
+build-webui:
+  pnpm --dir dashboard build
+
+webui: build-webui
   pnpm --dir dashboard serve
