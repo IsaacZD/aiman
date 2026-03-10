@@ -164,6 +164,7 @@ type LogEntry = {
   line: string;
 };
 
+// High-level UI state.
 const hosts = ref<Host[]>([]);
 const engines = ref<EngineItem[]>([]);
 const selected = ref<EngineItem | null>(null);
@@ -178,6 +179,7 @@ const logHistory = ref<LogEntry[]>([]);
 
 let ws: WebSocket | null = null;
 
+// Load hosts + engines from the dashboard API.
 async function refreshAll() {
   loading.value = true;
   errors.value = [];
@@ -206,6 +208,7 @@ async function refreshAll() {
   }
 }
 
+// Proxy control commands to the dashboard server.
 async function startEngine(engine: EngineItem) {
   await fetch(`/api/hosts/${engine.host.id}/engines/${engine.instance.id}/start`, {
     method: "POST"
@@ -220,6 +223,7 @@ async function stopEngine(engine: EngineItem) {
   await refreshAll();
 }
 
+// Selecting an engine updates detail views.
 function selectEngine(engine: EngineItem) {
   selected.value = engine;
   if (detailTab.value === "live") {
@@ -230,6 +234,7 @@ function selectEngine(engine: EngineItem) {
   }
 }
 
+// Open a WS stream to receive live logs.
 function connectLogs() {
   if (!selected.value) {
     return;
@@ -256,6 +261,7 @@ function connectLogs() {
   };
 }
 
+// Pull status/log history for the selected engine.
 async function loadHistory() {
   if (!selected.value) {
     return;
@@ -291,6 +297,7 @@ function statusClass(status: string) {
   return `status-${status.toLowerCase()}`;
 }
 
+// Initial load and cleanup.
 onMounted(refreshAll);
 
 onBeforeUnmount(() => {

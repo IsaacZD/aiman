@@ -1,5 +1,9 @@
+//! Shared data contracts between host and dashboard.
+//! Keep this crate dependency-light so both sides can reuse it for schemas.
+
 use serde::{Deserialize, Serialize};
 
+/// Engine configuration preset (one config = one runnable instance).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineConfig {
     pub id: String,
@@ -12,12 +16,14 @@ pub struct EngineConfig {
     pub auto_restart: AutoRestart,
 }
 
+/// Environment variable injection for a process.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvVar {
     pub key: String,
     pub value: String,
 }
 
+/// Supported engine types (extend as needed).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EngineType {
     Vllm,
@@ -25,6 +31,7 @@ pub enum EngineType {
     KTransformers,
 }
 
+/// Runtime status of an engine instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EngineStatus {
     Starting,
@@ -33,6 +40,7 @@ pub enum EngineStatus {
     Error,
 }
 
+/// Snapshot of a running or stopped engine instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineInstance {
     pub id: String,
@@ -45,6 +53,7 @@ pub struct EngineInstance {
     pub health: Option<String>,
 }
 
+/// One log line emitted by an engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
     pub ts: String,
@@ -52,12 +61,14 @@ pub struct LogEntry {
     pub line: String,
 }
 
+/// Log stream origin.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LogStream {
     Stdout,
     Stderr,
 }
 
+/// Optional restart policy for crashed processes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutoRestart {
     pub enabled: bool,

@@ -17,8 +17,10 @@ type HostsFile = {
   host?: HostConfig[];
 };
 
+// Dashboard API server and UI static host.
 const server = Fastify({ logger: true });
 
+// Resolve paths relative to the repo root for config + built UI.
 const repoRoot = path.resolve(__dirname, "../../..");
 const configPath = process.env.AIMAN_HOSTS_CONFIG ?? path.join(repoRoot, "configs", "hosts.toml");
 const uiDir = path.resolve(__dirname, "../../dist/ui");
@@ -27,11 +29,13 @@ server.register(websocketPlugin);
 
 server.get("/health", async () => ({ status: "ok" }));
 
+// Expose configured host list to the UI.
 server.get("/api/hosts", async () => {
   const hosts = await loadHosts();
   return { hosts };
 });
 
+// Aggregate engine lists across all configured hosts.
 server.get("/api/engines", async () => {
   const hosts = await loadHosts();
   const results = await Promise.all(
@@ -54,6 +58,7 @@ server.get("/api/engines", async () => {
   return { results };
 });
 
+// Proxy start command to the selected host.
 server.post("/api/hosts/:hostId/engines/:engineId/start", async (request, reply) => {
   const { hostId, engineId } = request.params as { hostId: string; engineId: string };
   const host = await findHost(hostId);
@@ -69,6 +74,7 @@ server.post("/api/hosts/:hostId/engines/:engineId/start", async (request, reply)
   return reply.code(res.status).send(body ?? { ok: res.ok });
 });
 
+// Proxy stop command to the selected host.
 server.post("/api/hosts/:hostId/engines/:engineId/stop", async (request, reply) => {
   const { hostId, engineId } = request.params as { hostId: string; engineId: string };
   const host = await findHost(hostId);
@@ -84,6 +90,7 @@ server.post("/api/hosts/:hostId/engines/:engineId/stop", async (request, reply) 
   return reply.code(res.status).send(body ?? { ok: res.ok });
 });
 
+// Bridge WS log stream from host -> browser.
 server.get(
   "/api/hosts/:hostId/engines/:engineId/logs/ws",
   { websocket: true },
@@ -118,6 +125,7 @@ server.get(
   }
 );
 
+// Serve built UI assets.
 server.register(fastifyStatic, {
   root: uiDir,
   prefix: "/"
@@ -131,17 +139,20 @@ server.listen({ port, host }).catch((err) => {
   process.exit(1);
 });
 
+// Load hosts from TOML config file.
 async function loadHosts(): Promise<HostConfig[]> {
   const raw = await readFile(configPath, "utf8");
   const data = toml.parse(raw) as HostsFile;
   return Array.isArray(data.host) ? data.host : [];
 }
 
+// Find a host by ID.
 async function findHost(id: string): Promise<HostConfig | undefined> {
   const hosts = await loadHosts();
   return hosts.find((host) => host.id === id);
 }
 
+// Best-effort JSON parsing for proxied responses.
 async function safeJson(res: Response) {
   try {
     return await res.json();

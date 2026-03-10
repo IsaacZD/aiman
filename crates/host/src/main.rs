@@ -25,6 +25,7 @@ use tokio::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+// Keep a bounded in-memory log buffer per engine for WS backfill.
 const LOG_BUFFER_MAX: usize = 2000;
 
 #[derive(Clone)]
@@ -40,10 +41,12 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    // Load engine configs (defaults to repo-relative path).
     let config_path = std::env::var("AIMAN_ENGINES_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("configs/engines.toml"));
 
+    // Data dir holds JSONL logs/status history.
     let data_dir = std::env::var("AIMAN_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("data"));
@@ -58,6 +61,7 @@ async fn main() {
         api_key,
     };
 
+    // HTTP API surface for control + observability.
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/engines", get(list_engines))
@@ -83,6 +87,7 @@ async fn health() -> &'static str {
     "ok"
 }
 
+// Simple bearer-token auth; disabled when AIMAN_API_KEY is unset.
 async fn auth_middleware(
     State(state): State<AppState>,
     request: axum::http::Request<axum::body::Body>,
@@ -150,6 +155,7 @@ async fn stop_engine(
     Ok(Json(EngineResponse { instance }))
 }
 
+// WebSocket log stream (JSON per line) with initial buffer replay.
 async fn engine_logs_ws(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -170,7 +176,7 @@ async fn engine_logs_ws(
         for entry in buffer {
             if let Ok(text) = serde_json::to_string(&entry) {
                 if sender
-                    .send(axum::extract::ws::Message::Text(text))
+                    .send(axum::extract::ws::Message::Text(text.into()))
                     .await
                     .is_err()
                 {
@@ -179,11 +185,16 @@ async fn engine_logs_ws(
             }
         }
 
+        // Fan out new log entries to the client.
         loop {
             tokio::select! {
                 Ok(entry) = rx.recv() => {
                     if let Ok(text) = serde_json::to_string(&entry) {
-                        if sender.send(axum::extract::ws::Message::Text(text)).await.is_err() {
+                        if sender
+                            .send(axum::extract::ws::Message::Text(text.into()))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -283,6 +294,7 @@ fn map_supervisor_error(err: SupervisorError) -> StatusCode {
 }
 
 #[derive(Clone)]
+// Supervisor holds engine handles and mediates lifecycle control.
 struct Supervisor {
     configs: Arc<HashMap<String, EngineConfig>>,
     handles: Arc<RwLock<HashMap<String, Arc<EngineHandle>>>>,
@@ -295,6 +307,7 @@ impl Supervisor {
         let mut configs = HashMap::new();
         let mut handles = HashMap::new();
 
+        // Ensure persistence directories exist.
         tokio::fs::create_dir_all(data_dir.join("logs")).await?;
         tokio::fs::create_dir_all(data_dir.join("status")).await?;
 
@@ -358,6 +371,7 @@ struct ConfigFile {
     engine: Vec<EngineConfig>,
 }
 
+// Per-engine state + control handles.
 struct EngineHandle {
     config: EngineConfig,
     instance: Arc<RwLock<EngineInstance>>,
@@ -370,6 +384,7 @@ struct EngineHandle {
     status_write_lock: Arc<Mutex<()>>,
 }
 
+// Control plane state for stopping/restarting a running task.
 struct EngineControl {
     stop_tx: Option<watch::Sender<bool>>,
     task: Option<JoinHandle<()>>,
@@ -406,6 +421,7 @@ impl EngineHandle {
         }
     }
 
+    // Start the engine task if not running.
     async fn start(&self) -> Result<(), SupervisorError> {
         let mut control = self.control.lock().await;
         if control
@@ -427,6 +443,7 @@ impl EngineHandle {
         Ok(())
     }
 
+    // Signal the task to stop.
     async fn stop(&self) -> Result<(), SupervisorError> {
         let control = self.control.lock().await;
         let Some(stop_tx) = &control.stop_tx else {
@@ -451,6 +468,7 @@ impl EngineHandle {
 }
 
 #[derive(Clone)]
+// Lightweight clone passed into the async task.
 struct EngineTaskHandle {
     config: EngineConfig,
     instance: Arc<RwLock<EngineInstance>>,
@@ -462,6 +480,7 @@ struct EngineTaskHandle {
     status_write_lock: Arc<Mutex<()>>,
 }
 
+// Spawn and supervise the process with optional auto-restart.
 async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<bool>) {
     let mut retries = 0;
 
@@ -534,6 +553,7 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
     }
 }
 
+// Build and spawn the engine child process.
 async fn spawn_process(config: &EngineConfig) -> anyhow::Result<tokio::process::Child> {
     let mut command = Command::new(&config.command);
     command.args(&config.args);
@@ -554,6 +574,7 @@ async fn spawn_process(config: &EngineConfig) -> anyhow::Result<tokio::process::
     Ok(child)
 }
 
+// Read log lines, store to buffer + JSONL, and broadcast.
 async fn stream_logs<R: tokio::io::AsyncRead + Unpin>(
     handle: Arc<EngineTaskHandle>,
     reader: BufReader<R>,
@@ -580,6 +601,7 @@ async fn stream_logs<R: tokio::io::AsyncRead + Unpin>(
     }
 }
 
+// Update in-memory status and persist snapshot to JSONL.
 async fn set_status(
     handle: &EngineTaskHandle,
     status: EngineStatus,
@@ -599,6 +621,7 @@ async fn set_status(
     append_jsonl(&handle.status_path, &handle.status_write_lock, &snapshot).await;
 }
 
+// Record a stop event with exit code.
 async fn set_exit_status(handle: &EngineTaskHandle, code: Option<i32>) {
     let mut instance = handle.instance.write().await;
     instance.status = EngineStatus::Stopped;
@@ -618,6 +641,7 @@ fn now() -> String {
     Utc::now().to_rfc3339()
 }
 
+// Append a JSONL line with a simple mutex to avoid interleaving.
 async fn append_jsonl<T: Serialize>(path: &PathBuf, lock: &Arc<Mutex<()>>, value: &T) {
     let _guard = lock.lock().await;
     if let Ok(line) = serde_json::to_string(value) {
@@ -634,6 +658,7 @@ async fn append_jsonl<T: Serialize>(path: &PathBuf, lock: &Arc<Mutex<()>>, value
     }
 }
 
+// Read JSONL with optional since + limit filtering.
 async fn read_jsonl<T: for<'de> Deserialize<'de>>(
     path: &PathBuf,
     since: Option<&str>,
@@ -673,6 +698,7 @@ async fn read_jsonl<T: for<'de> Deserialize<'de>>(
     Ok(entries.into_iter().collect())
 }
 
+// Best-effort timestamp extraction for since filtering.
 fn extract_ts(line: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
     value.get("ts")?.as_str().map(|s| s.to_string())
