@@ -1,0 +1,11 @@
+[[host]]
+id = "llm-01"
+name = "LLM Server 01"
+base_url = "https://llm-01.lan:4010"
+api_key = "change-me"
+
+[[host]]
+id = "llm-02"
+name = "LLM Server 02"
+base_url = "https://llm-02.lan:4010"
+api_key = "change-me"

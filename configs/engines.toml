@@ -1,0 +1,25 @@
+[[engine]]
+id = "deepseek-vllm"
+name = "DeepSeek via vLLM"
+engine_type = "Vllm"
+command = "/run/current-system/sw/bin/python"
+args = ["-m", "vllm.entrypoints.openai.api_server", "--model", "/models/deepseek"]
+working_dir = "/var/lib/aiman"
+
+auto_restart = { enabled = true, max_retries = 5, backoff_secs = 10 }
+
+env = [
+  { key = "CUDA_VISIBLE_DEVICES", value = "0" }
+]
+
+[[engine]]
+id = "qwen-llamacpp"
+name = "Qwen via llama.cpp"
+engine_type = "LlamaCpp"
+command = "/var/lib/llama.cpp/server"
+args = ["-m", "/models/qwen.gguf", "--port", "8081"]
+working_dir = "/var/lib/aiman"
+
+auto_restart = { enabled = false, max_retries = 0, backoff_secs = 5 }
+
+env = []
