@@ -3,6 +3,7 @@ import fastifyStatic from "@fastify/static";
 import websocketPlugin from "@fastify/websocket";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import toml from "toml";
 import WebSocket from "ws";
 
@@ -21,6 +22,8 @@ type HostsFile = {
 const server = Fastify({ logger: true });
 
 // Resolve paths relative to the repo root for config + built UI.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../../..");
 const configPath = process.env.AIMAN_HOSTS_CONFIG ?? path.join(repoRoot, "configs", "hosts.toml");
 const uiDir = path.resolve(__dirname, "../../dist/ui");

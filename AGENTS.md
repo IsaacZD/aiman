@@ -15,7 +15,7 @@
 - `pnpm --dir dashboard install` — Install dashboard dependencies.
 - `pnpm --dir dashboard dev` — Run the Vite UI dev server.
 - `pnpm --dir dashboard build` — Build the production UI assets.
-- `pnpm --dir dashboard server` — Run the dashboard Fastify server.
+- `pnpm --dir dashboard serve` — Run the dashboard Fastify server.
 
 ## Coding Style & Naming Conventions
 - Rust: follow `rustfmt` defaults; use `snake_case` for functions and `CamelCase` for types.
