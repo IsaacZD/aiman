@@ -19,8 +19,10 @@ use crate::supervisor::Supervisor;
 
 #[tokio::main]
 async fn main() {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new("info"))
+        .with(env_filter)
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -35,11 +37,23 @@ async fn main() {
         .unwrap_or_else(|_| data_dir.join("configs.json"));
     let seed_path = std::env::var("AIMAN_ENGINES_CONFIG").ok().map(PathBuf::from);
 
+    tracing::info!(
+        data_dir = %data_dir.display(),
+        config_path = %config_path.display(),
+        seed_path = seed_path.as_ref().map(|path| path.display().to_string()),
+        "host paths configured"
+    );
+
     let supervisor = Supervisor::from_store(config_path, data_dir, seed_path)
         .await
         .expect("load engine config store");
 
     let api_key = std::env::var("AIMAN_API_KEY").ok();
+    if api_key.is_some() {
+        tracing::info!("auth enabled (AIMAN_API_KEY set)");
+    } else {
+        tracing::info!("auth disabled (AIMAN_API_KEY unset)");
+    }
     let state = AppState {
         supervisor: Arc::new(supervisor),
         api_key,

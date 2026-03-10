@@ -60,6 +60,12 @@ impl Supervisor {
         data_dir: PathBuf,
         seed_path: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
+        tracing::info!(
+            config_path = %config_path.display(),
+            data_dir = %data_dir.display(),
+            seed_path = seed_path.as_ref().map(|path| path.display().to_string()),
+            "loading engine config store"
+        );
         // Ensure persistence directories exist.
         tokio::fs::create_dir_all(data_dir.join("logs")).await?;
         tokio::fs::create_dir_all(data_dir.join("status")).await?;
@@ -68,11 +74,13 @@ impl Supervisor {
         }
 
         let configs_vec = load_config_store(&config_path, seed_path.as_ref()).await?;
+        tracing::info!(count = configs_vec.len(), "loaded engine configs");
         let mut configs = HashMap::new();
         let mut handles = HashMap::new();
 
         for config in configs_vec {
             let id = config.id.clone();
+            tracing::debug!(engine_id = %id, "registering engine config");
             configs.insert(id.clone(), config.clone());
             handles.insert(
                 id.clone(),
@@ -140,6 +148,7 @@ impl Supervisor {
         );
 
         persist_config_store(&self.config_path, &configs).await;
+        tracing::info!(engine_id = %id, "added engine config");
         Ok(config)
     }
 
@@ -174,6 +183,7 @@ impl Supervisor {
         );
 
         persist_config_store(&self.config_path, &configs).await;
+        tracing::info!(engine_id = %id, "updated engine config");
         Ok(config)
     }
 
@@ -187,10 +197,12 @@ impl Supervisor {
         configs.remove(id);
         handles.remove(id);
         persist_config_store(&self.config_path, &configs).await;
+        tracing::info!(engine_id = %id, "removed engine config");
         Ok(())
     }
 
     pub async fn start(&self, id: &str) -> Result<EngineInstance, SupervisorError> {
+        tracing::info!(engine_id = %id, "start requested");
         let handle = self.get_handle(id).await.ok_or(SupervisorError::NotFound)?;
         handle.start().await?;
         let instance = handle.instance.read().await.clone();
@@ -198,6 +210,7 @@ impl Supervisor {
     }
 
     pub async fn stop(&self, id: &str) -> Result<EngineInstance, SupervisorError> {
+        tracing::info!(engine_id = %id, "stop requested");
         let handle = self.get_handle(id).await.ok_or(SupervisorError::NotFound)?;
         handle.stop().await?;
         let instance = handle.instance.read().await.clone();
@@ -331,6 +344,7 @@ impl EngineHandle {
             .map(|task| !task.is_finished())
             .unwrap_or(false)
         {
+            tracing::warn!(engine_id = %self.config.id, "start skipped; already running");
             return Err(SupervisorError::AlreadyRunning);
         }
 
@@ -338,6 +352,7 @@ impl EngineHandle {
         control.stop_tx = Some(stop_tx);
 
         let handle = Arc::new(self.clone_for_task());
+        tracing::info!(engine_id = %self.config.id, "spawning engine task");
         control.task = Some(tokio::spawn(async move {
             run_engine(handle, stop_rx).await;
         }));
@@ -348,6 +363,7 @@ impl EngineHandle {
     async fn stop(&self) -> Result<(), SupervisorError> {
         let control = self.control.lock().await;
         let Some(stop_tx) = &control.stop_tx else {
+            tracing::warn!(engine_id = %self.config.id, "stop skipped; engine not running");
             return Err(SupervisorError::NotRunning);
         };
         let _ = stop_tx.send(true);
@@ -387,15 +403,22 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
 
     loop {
         if *stop_rx.borrow() {
+            tracing::info!(engine_id = %handle.config.id, "stop signal received before start");
             set_status(&handle, EngineStatus::Stopped, None, None).await;
             break;
         }
 
+        tracing::info!(engine_id = %handle.config.id, "starting engine process");
         set_status(&handle, EngineStatus::Starting, None, None).await;
 
         match spawn_process(&handle.config).await {
             Ok(mut child) => {
                 let pid = child.id();
+                tracing::info!(
+                    engine_id = %handle.config.id,
+                    pid = pid,
+                    "engine process spawned"
+                );
                 set_status(&handle, EngineStatus::Running, pid, Some(now())).await;
 
                 let mut stdout_task = None;
@@ -419,6 +442,11 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
                 tokio::select! {
                     _ = stop_rx.changed() => {
                         if *stop_rx.borrow() {
+                            tracing::info!(
+                                engine_id = %handle.config.id,
+                                pid = pid,
+                                "stop signal received; terminating engine process"
+                            );
                             let _ = child.kill().await;
                             let _ = child.wait().await;
                             set_status(&handle, EngineStatus::Stopped, None, None).await;
@@ -427,6 +455,12 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
                     }
                     status = child.wait() => {
                         let code = status.ok().and_then(|s| s.code());
+                        tracing::info!(
+                            engine_id = %handle.config.id,
+                            pid = pid,
+                            exit_code = code,
+                            "engine process exited"
+                        );
                         set_exit_status(&handle, code).await;
                     }
                 }
@@ -446,16 +480,31 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
 
         if should_restart(&handle.config.auto_restart, retries) {
             retries += 1;
+            tracing::info!(
+                engine_id = %handle.config.id,
+                attempt = retries,
+                backoff_secs = handle.config.auto_restart.backoff_secs,
+                "auto-restart scheduled"
+            );
             tokio::time::sleep(Duration::from_secs(handle.config.auto_restart.backoff_secs)).await;
             continue;
         }
 
+        tracing::info!(engine_id = %handle.config.id, "engine supervision loop exiting");
         break;
     }
 }
 
 // Build and spawn the engine child process.
 async fn spawn_process(config: &EngineConfig) -> anyhow::Result<tokio::process::Child> {
+    tracing::debug!(
+        engine_id = %config.id,
+        command = %config.command,
+        args = ?config.args,
+        working_dir = config.working_dir.as_deref(),
+        env_count = config.env.len(),
+        "spawning engine process"
+    );
     let mut command = Command::new(&config.command);
     command.args(&config.args);
 
@@ -500,6 +549,11 @@ async fn stream_logs<R: tokio::io::AsyncRead + Unpin>(
         append_jsonl(&handle.log_path, &handle.log_write_lock, &entry).await;
         let _ = handle.log_tx.send(entry);
     }
+    tracing::debug!(
+        engine_id = %handle.config.id,
+        stream = ?stream,
+        "log stream ended"
+    );
 }
 
 // Update in-memory status and persist snapshot to JSONL.
@@ -520,6 +574,12 @@ async fn set_status(
     let snapshot = instance.clone();
     drop(instance);
     append_jsonl(&handle.status_path, &handle.status_write_lock, &snapshot).await;
+    tracing::debug!(
+        engine_id = %handle.config.id,
+        status = ?snapshot.status,
+        pid = pid,
+        "engine status updated"
+    );
 }
 
 // Record a stop event with exit code.
@@ -532,6 +592,11 @@ async fn set_exit_status(handle: &EngineTaskHandle, code: Option<i32>) {
     let snapshot = instance.clone();
     drop(instance);
     append_jsonl(&handle.status_path, &handle.status_write_lock, &snapshot).await;
+    tracing::debug!(
+        engine_id = %handle.config.id,
+        exit_code = code,
+        "engine exit status recorded"
+    );
 }
 
 fn should_restart(policy: &AutoRestart, retries: u32) -> bool {

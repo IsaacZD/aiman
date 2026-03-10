@@ -17,6 +17,7 @@ pub async fn health() -> &'static str {
 }
 
 pub async fn list_engines(State(state): State<AppState>) -> Json<EnginesResponse> {
+    tracing::debug!("list engines requested");
     Json(EnginesResponse {
         engines: state.supervisor.list_instances().await,
     })
@@ -26,6 +27,7 @@ pub async fn get_engine(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<EngineResponse>, StatusCode> {
+    tracing::debug!(engine_id = %id, "get engine requested");
     let instance = state
         .supervisor
         .get_instance(&id)
@@ -39,6 +41,7 @@ pub async fn start_engine(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<EngineResponse>, StatusCode> {
+    tracing::info!(engine_id = %id, "start engine API called");
     let instance = state
         .supervisor
         .start(&id)
@@ -52,6 +55,7 @@ pub async fn stop_engine(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<EngineResponse>, StatusCode> {
+    tracing::info!(engine_id = %id, "stop engine API called");
     let instance = state
         .supervisor
         .stop(&id)
@@ -67,6 +71,7 @@ pub async fn engine_logs_ws(
     Path(id): Path<String>,
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, StatusCode> {
+    tracing::debug!(engine_id = %id, "engine logs websocket upgrade requested");
     let handle = state
         .supervisor
         .get_handle(&id)
@@ -74,6 +79,7 @@ pub async fn engine_logs_ws(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(ws.on_upgrade(move |socket| async move {
+        tracing::info!(engine_id = %id, "engine logs websocket connected");
         let mut rx = handle.log_tx.subscribe();
         let buffer = { handle.log_buffer.lock().await.clone() };
 
@@ -113,6 +119,7 @@ pub async fn engine_logs_ws(
                 else => break,
             }
         }
+        tracing::info!(engine_id = %id, "engine logs websocket disconnected");
     }))
 }
 
@@ -127,6 +134,12 @@ pub async fn engine_logs(
     Path(id): Path<String>,
     axum::extract::Query(query): axum::extract::Query<LogQuery>,
 ) -> Result<Json<LogHistoryResponse>, StatusCode> {
+    tracing::debug!(
+        engine_id = %id,
+        since = query.since.as_deref(),
+        limit = query.limit,
+        "engine logs requested"
+    );
     let handle = state
         .supervisor
         .get_handle(&id)
@@ -145,6 +158,12 @@ pub async fn engine_status_history(
     Path(id): Path<String>,
     axum::extract::Query(query): axum::extract::Query<LogQuery>,
 ) -> Result<Json<StatusHistoryResponse>, StatusCode> {
+    tracing::debug!(
+        engine_id = %id,
+        since = query.since.as_deref(),
+        limit = query.limit,
+        "engine status history requested"
+    );
     let handle = state
         .supervisor
         .get_handle(&id)
@@ -159,6 +178,7 @@ pub async fn engine_status_history(
 }
 
 pub async fn list_configs(State(state): State<AppState>) -> Json<ConfigsResponse> {
+    tracing::debug!("list configs requested");
     Json(ConfigsResponse {
         configs: state.supervisor.list_configs().await,
     })
@@ -168,6 +188,7 @@ pub async fn create_config(
     State(state): State<AppState>,
     Json(config): Json<EngineConfig>,
 ) -> Result<Json<ConfigResponse>, StatusCode> {
+    tracing::info!(engine_id = %config.id, "create config API called");
     let config = state
         .supervisor
         .add_config(config)
@@ -181,6 +202,7 @@ pub async fn update_config(
     Path(id): Path<String>,
     Json(config): Json<EngineConfig>,
 ) -> Result<Json<ConfigResponse>, StatusCode> {
+    tracing::info!(engine_id = %id, "update config API called");
     let config = state
         .supervisor
         .update_config(&id, config)
@@ -193,6 +215,7 @@ pub async fn delete_config(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<DeleteResponse>, StatusCode> {
+    tracing::info!(engine_id = %id, "delete config API called");
     state
         .supervisor
         .remove_config(&id)

@@ -26,6 +26,10 @@ pub async fn auth_middleware(
     if provided == Some(expected.as_str()) {
         Ok(next.run(request).await)
     } else {
+        tracing::warn!(
+            path = %request.uri(),
+            "unauthorized request"
+        );
         Err(StatusCode::UNAUTHORIZED)
     }
 }
