@@ -131,6 +131,12 @@ h2 {
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
+.panel-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
 .primary {
   background: var(--accent);
   color: white;
@@ -308,6 +314,112 @@ h2 {
   color: var(--muted);
 }
 
+.config-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.config-toolbar select {
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(17, 17, 17, 0.2);
+  background: white;
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(320px, 1.2fr);
+  gap: 20px;
+}
+
+.config-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.config-card {
+  background: white;
+  border-radius: 18px;
+  padding: 16px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  box-shadow: 0 12px 20px rgba(15, 15, 15, 0.08);
+}
+
+.config-card h3 {
+  margin: 0 0 6px;
+}
+
+.config-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.config-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.config-form {
+  background: white;
+  border-radius: 18px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 12px 20px rgba(15, 15, 15, 0.08);
+}
+
+.config-form h3 {
+  margin: 0 0 6px;
+}
+
+.config-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.config-form input,
+.config-form select,
+.config-form textarea {
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(17, 17, 17, 0.2);
+  font-family: inherit;
+  font-size: 0.95rem;
+}
+
+.config-form textarea {
+  resize: vertical;
+}
+
+.config-inline {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  align-items: center;
+}
+
+.config-inline label {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+}
+
+.config-submit {
+  display: flex;
+  justify-content: flex-end;
+}
+
 @media (max-width: 720px) {
   .page {
     padding: 40px 20px 80px;
@@ -324,5 +436,14 @@ h2 {
 
   .tabs {
     width: 100%;
+  }
+
+  .config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .config-toolbar {
+    width: 100%;
+    flex-wrap: wrap;
   }
 }

@@ -14,6 +14,7 @@
       {
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
+            just
             rustc
             cargo
             rustfmt
@@ -23,7 +24,18 @@
             nodejs_20
             pnpm
           ];
+
           RUST_BACKTRACE = "1";
+
+          # host
+          AIMAN_BIND = "0.0.0.0:4010";
+          AIMAN_DATA_DIR = "./mock/host/data";
+          # AIMAN_CONFIG_STORE = "./mock/host/data/configs.json";
+          AIMAN_ENGINES_CONFIG = "./mock/host/engines.toml";
+          # AIMAN_API_KEY = "";
+
+          # dashboard
+          AIMAN_HOSTS_CONFIG = "../mock/dashboard/hosts.toml"; # need .. because the work dir is dashboard
         };
 
         apps = {

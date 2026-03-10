@@ -26,8 +26,12 @@ pub enum SupervisorError {
     AlreadyRunning,
     #[error("engine not running")]
     NotRunning,
-    #[error("engine failed to start: {0}")]
-    StartFailed(String),
+    #[error("engine config already exists")]
+    ConfigExists,
+    #[error("engine config in use")]
+    ConfigInUse,
+    #[error("engine config invalid: {0}")]
+    ConfigInvalid(String),
 }
 
 pub fn map_supervisor_error(err: SupervisorError) -> axum::http::StatusCode {
@@ -35,29 +39,39 @@ pub fn map_supervisor_error(err: SupervisorError) -> axum::http::StatusCode {
         SupervisorError::NotFound => axum::http::StatusCode::NOT_FOUND,
         SupervisorError::AlreadyRunning => axum::http::StatusCode::CONFLICT,
         SupervisorError::NotRunning => axum::http::StatusCode::CONFLICT,
-        SupervisorError::StartFailed(_) => axum::http::StatusCode::BAD_REQUEST,
+        SupervisorError::ConfigExists => axum::http::StatusCode::CONFLICT,
+        SupervisorError::ConfigInUse => axum::http::StatusCode::CONFLICT,
+        SupervisorError::ConfigInvalid(_) => axum::http::StatusCode::BAD_REQUEST,
     }
 }
 
 #[derive(Clone)]
 // Supervisor holds engine handles and mediates lifecycle control.
 pub struct Supervisor {
-    configs: Arc<HashMap<String, EngineConfig>>,
+    config_path: PathBuf,
+    data_dir: PathBuf,
+    configs: Arc<RwLock<HashMap<String, EngineConfig>>>,
     handles: Arc<RwLock<HashMap<String, Arc<EngineHandle>>>>,
 }
 
 impl Supervisor {
-    pub async fn from_file(path: PathBuf, data_dir: PathBuf) -> anyhow::Result<Self> {
-        let raw = tokio::fs::read_to_string(path).await?;
-        let parsed: ConfigFile = toml::from_str(&raw)?;
-        let mut configs = HashMap::new();
-        let mut handles = HashMap::new();
-
+    pub async fn from_store(
+        config_path: PathBuf,
+        data_dir: PathBuf,
+        seed_path: Option<PathBuf>,
+    ) -> anyhow::Result<Self> {
         // Ensure persistence directories exist.
         tokio::fs::create_dir_all(data_dir.join("logs")).await?;
         tokio::fs::create_dir_all(data_dir.join("status")).await?;
+        if let Some(parent) = config_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
 
-        for config in parsed.engine {
+        let configs_vec = load_config_store(&config_path, seed_path.as_ref()).await?;
+        let mut configs = HashMap::new();
+        let mut handles = HashMap::new();
+
+        for config in configs_vec {
             let id = config.id.clone();
             configs.insert(id.clone(), config.clone());
             handles.insert(
@@ -71,7 +85,9 @@ impl Supervisor {
         }
 
         Ok(Self {
-            configs: Arc::new(configs),
+            config_path,
+            data_dir,
+            configs: Arc::new(RwLock::new(configs)),
             handles: Arc::new(RwLock::new(handles)),
         })
     }
@@ -97,6 +113,83 @@ impl Supervisor {
         handles.get(id).cloned()
     }
 
+    pub async fn list_configs(&self) -> Vec<EngineConfig> {
+        let configs = self.configs.read().await;
+        let mut values: Vec<_> = configs.values().cloned().collect();
+        values.sort_by(|a, b| a.id.cmp(&b.id));
+        values
+    }
+
+    pub async fn add_config(&self, config: EngineConfig) -> Result<EngineConfig, SupervisorError> {
+        validate_config(&config)?;
+        let mut configs = self.configs.write().await;
+        if configs.contains_key(&config.id) {
+            return Err(SupervisorError::ConfigExists);
+        }
+        let mut handles = self.handles.write().await;
+
+        let id = config.id.clone();
+        configs.insert(id.clone(), config.clone());
+        handles.insert(
+            id.clone(),
+            Arc::new(EngineHandle::new(
+                config.clone(),
+                self.data_dir.join("logs").join(format!("{id}.jsonl")),
+                self.data_dir.join("status").join(format!("{id}.jsonl")),
+            )),
+        );
+
+        persist_config_store(&self.config_path, &configs).await;
+        Ok(config)
+    }
+
+    pub async fn update_config(
+        &self,
+        id: &str,
+        config: EngineConfig,
+    ) -> Result<EngineConfig, SupervisorError> {
+        validate_config(&config)?;
+        if id != config.id {
+            return Err(SupervisorError::ConfigInvalid(
+                "config id mismatch".to_string(),
+            ));
+        }
+
+        let mut configs = self.configs.write().await;
+        let mut handles = self.handles.write().await;
+
+        let handle = handles.get(id).cloned().ok_or(SupervisorError::NotFound)?;
+        if handle_is_running(&handle).await {
+            return Err(SupervisorError::ConfigInUse);
+        }
+
+        configs.insert(id.to_string(), config.clone());
+        handles.insert(
+            id.to_string(),
+            Arc::new(EngineHandle::new(
+                config.clone(),
+                self.data_dir.join("logs").join(format!("{id}.jsonl")),
+                self.data_dir.join("status").join(format!("{id}.jsonl")),
+            )),
+        );
+
+        persist_config_store(&self.config_path, &configs).await;
+        Ok(config)
+    }
+
+    pub async fn remove_config(&self, id: &str) -> Result<(), SupervisorError> {
+        let mut configs = self.configs.write().await;
+        let mut handles = self.handles.write().await;
+        let handle = handles.get(id).cloned().ok_or(SupervisorError::NotFound)?;
+        if handle_is_running(&handle).await {
+            return Err(SupervisorError::ConfigInUse);
+        }
+        configs.remove(id);
+        handles.remove(id);
+        persist_config_store(&self.config_path, &configs).await;
+        Ok(())
+    }
+
     pub async fn start(&self, id: &str) -> Result<EngineInstance, SupervisorError> {
         let handle = self.get_handle(id).await.ok_or(SupervisorError::NotFound)?;
         handle.start().await?;
@@ -115,6 +208,68 @@ impl Supervisor {
 #[derive(Deserialize)]
 struct ConfigFile {
     engine: Vec<EngineConfig>,
+}
+
+async fn load_config_store(
+    path: &PathBuf,
+    seed_path: Option<&PathBuf>,
+) -> anyhow::Result<Vec<EngineConfig>> {
+    if let Ok(raw) = tokio::fs::read_to_string(path).await {
+        if raw.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let configs: Vec<EngineConfig> = serde_json::from_str(&raw)?;
+        return Ok(configs);
+    }
+
+    if let Some(seed_path) = seed_path {
+        if let Ok(raw) = tokio::fs::read_to_string(seed_path).await {
+            let parsed: ConfigFile = toml::from_str(&raw)?;
+            let configs = parsed.engine;
+            persist_config_store(path, &configs_to_map(&configs)).await;
+            return Ok(configs);
+        }
+    }
+
+    Ok(Vec::new())
+}
+
+fn configs_to_map(configs: &[EngineConfig]) -> HashMap<String, EngineConfig> {
+    configs
+        .iter()
+        .cloned()
+        .map(|config| (config.id.clone(), config))
+        .collect()
+}
+
+async fn persist_config_store(path: &PathBuf, configs: &HashMap<String, EngineConfig>) {
+    let mut values: Vec<_> = configs.values().cloned().collect();
+    values.sort_by(|a, b| a.id.cmp(&b.id));
+    if let Ok(serialized) = serde_json::to_string_pretty(&values) {
+        let _ = tokio::fs::write(path, serialized).await;
+    }
+}
+
+fn validate_config(config: &EngineConfig) -> Result<(), SupervisorError> {
+    if config.id.trim().is_empty() {
+        return Err(SupervisorError::ConfigInvalid("id is required".to_string()));
+    }
+    if config.command.trim().is_empty() {
+        return Err(SupervisorError::ConfigInvalid(
+            "command is required".to_string(),
+        ));
+    }
+    if config.name.trim().is_empty() {
+        return Err(SupervisorError::ConfigInvalid("name is required".to_string()));
+    }
+    Ok(())
+}
+
+async fn handle_is_running(handle: &EngineHandle) -> bool {
+    matches!(
+        handle.instance.read().await.status,
+        EngineStatus::Running | EngineStatus::Starting
+    )
 }
 
 // Per-engine state + control handles.

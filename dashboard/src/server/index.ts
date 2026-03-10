@@ -61,6 +61,77 @@ server.get("/api/engines", async () => {
   return { results };
 });
 
+// Proxy config list for a selected host.
+server.get("/api/hosts/:hostId/configs", async (request, reply) => {
+  const { hostId } = request.params as { hostId: string };
+  const host = await findHost(hostId);
+  if (!host) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+
+  const res = await fetch(`${host.base_url}/v1/configs`, {
+    headers: { Authorization: `Bearer ${host.api_key}` }
+  });
+  const body = await safeJson(res);
+  return reply.code(res.status).send(body ?? { ok: res.ok });
+});
+
+// Proxy create config to the selected host.
+server.post("/api/hosts/:hostId/configs", async (request, reply) => {
+  const { hostId } = request.params as { hostId: string };
+  const host = await findHost(hostId);
+  if (!host) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+
+  const res = await fetch(`${host.base_url}/v1/configs`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${host.api_key}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(request.body ?? {})
+  });
+  const body = await safeJson(res);
+  return reply.code(res.status).send(body ?? { ok: res.ok });
+});
+
+// Proxy update config to the selected host.
+server.put("/api/hosts/:hostId/configs/:configId", async (request, reply) => {
+  const { hostId, configId } = request.params as { hostId: string; configId: string };
+  const host = await findHost(hostId);
+  if (!host) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+
+  const res = await fetch(`${host.base_url}/v1/configs/${configId}`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${host.api_key}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(request.body ?? {})
+  });
+  const body = await safeJson(res);
+  return reply.code(res.status).send(body ?? { ok: res.ok });
+});
+
+// Proxy delete config to the selected host.
+server.delete("/api/hosts/:hostId/configs/:configId", async (request, reply) => {
+  const { hostId, configId } = request.params as { hostId: string; configId: string };
+  const host = await findHost(hostId);
+  if (!host) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+
+  const res = await fetch(`${host.base_url}/v1/configs/${configId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${host.api_key}` }
+  });
+  const body = await safeJson(res);
+  return reply.code(res.status).send(body ?? { ok: res.ok });
+});
+
 // Proxy start command to the selected host.
 server.post("/api/hosts/:hostId/engines/:engineId/start", async (request, reply) => {
   const { hostId, engineId } = request.params as { hostId: string; engineId: string };

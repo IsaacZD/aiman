@@ -7,7 +7,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 
-use aiman_shared::{EngineInstance, LogEntry};
+use aiman_shared::{EngineConfig, EngineInstance, LogEntry};
 
 use crate::state::AppState;
 use crate::supervisor::{map_supervisor_error, read_jsonl};
@@ -158,6 +158,49 @@ pub async fn engine_status_history(
     Ok(Json(StatusHistoryResponse { entries }))
 }
 
+pub async fn list_configs(State(state): State<AppState>) -> Json<ConfigsResponse> {
+    Json(ConfigsResponse {
+        configs: state.supervisor.list_configs().await,
+    })
+}
+
+pub async fn create_config(
+    State(state): State<AppState>,
+    Json(config): Json<EngineConfig>,
+) -> Result<Json<ConfigResponse>, StatusCode> {
+    let config = state
+        .supervisor
+        .add_config(config)
+        .await
+        .map_err(map_supervisor_error)?;
+    Ok(Json(ConfigResponse { config }))
+}
+
+pub async fn update_config(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(config): Json<EngineConfig>,
+) -> Result<Json<ConfigResponse>, StatusCode> {
+    let config = state
+        .supervisor
+        .update_config(&id, config)
+        .await
+        .map_err(map_supervisor_error)?;
+    Ok(Json(ConfigResponse { config }))
+}
+
+pub async fn delete_config(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<DeleteResponse>, StatusCode> {
+    state
+        .supervisor
+        .remove_config(&id)
+        .await
+        .map_err(map_supervisor_error)?;
+    Ok(Json(DeleteResponse { ok: true }))
+}
+
 #[derive(Serialize)]
 pub(crate) struct EnginesResponse {
     engines: Vec<EngineInstance>,
@@ -166,6 +209,21 @@ pub(crate) struct EnginesResponse {
 #[derive(Serialize)]
 pub(crate) struct EngineResponse {
     instance: EngineInstance,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ConfigsResponse {
+    configs: Vec<EngineConfig>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ConfigResponse {
+    config: EngineConfig,
+}
+
+#[derive(Serialize)]
+pub(crate) struct DeleteResponse {
+    ok: bool,
 }
 
 #[derive(Serialize)]

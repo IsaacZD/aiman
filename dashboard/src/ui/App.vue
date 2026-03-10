@@ -22,9 +22,12 @@
           <h2>Engines</h2>
           <p class="panel-sub">{{ engines.length }} configured engine(s)</p>
         </div>
-        <button class="primary" @click="refreshAll" :disabled="loading">
-          {{ loading ? "Refreshing..." : "Refresh" }}
-        </button>
+        <div class="panel-actions">
+          <button class="secondary" @click="scrollToConfigs">Manage configs</button>
+          <button class="primary" @click="refreshAll" :disabled="loading">
+            {{ loading ? "Refreshing..." : "Refresh" }}
+          </button>
+        </div>
       </div>
 
       <div v-if="errors.length" class="alert">
@@ -53,6 +56,98 @@
             <button class="ghost" @click.stop="stopEngine(engine)">Stop</button>
           </div>
         </article>
+      </div>
+    </section>
+
+    <section class="panel" id="configs">
+      <div class="panel-head">
+        <div>
+          <h2>Engine configs</h2>
+          <p class="panel-sub">Create, edit, and remove configs per host.</p>
+        </div>
+        <div class="config-toolbar">
+          <select v-model="configHostId" @change="loadConfigs">
+            <option v-for="host in hosts" :key="host.id" :value="host.id">
+              {{ host.name }}
+            </option>
+          </select>
+          <button class="secondary" @click="resetConfigForm">New config</button>
+        </div>
+      </div>
+
+      <div v-if="configErrors.length" class="alert">
+        <p v-for="error in configErrors" :key="error">{{ error }}</p>
+      </div>
+
+      <div class="config-grid">
+        <div class="config-list">
+          <article v-for="config in configs" :key="config.id" class="config-card">
+            <div>
+              <h3>{{ config.name }}</h3>
+              <p class="config-meta">{{ config.id }} • {{ config.engine_type }}</p>
+            </div>
+            <div class="config-actions">
+              <button class="secondary" @click="editConfig(config)">Edit</button>
+              <button class="ghost" @click="deleteConfig(config)">Delete</button>
+            </div>
+          </article>
+          <p v-if="!configs.length" class="empty">No configs yet.</p>
+        </div>
+
+        <form class="config-form" @submit.prevent="saveConfig">
+          <h3>{{ configMode === "create" ? "Create config" : "Edit config" }}</h3>
+          <label>
+            Config ID
+            <input v-model="configForm.id" type="text" placeholder="deepseek-vllm" />
+          </label>
+          <label>
+            Display name
+            <input v-model="configForm.name" type="text" placeholder="DeepSeek via vLLM" />
+          </label>
+          <label>
+            Engine type
+            <select v-model="configForm.engine_type">
+              <option value="Vllm">Vllm</option>
+              <option value="LlamaCpp">LlamaCpp</option>
+              <option value="KTransformers">KTransformers</option>
+            </select>
+          </label>
+          <label>
+            Command
+            <input v-model="configForm.command" type="text" placeholder="/opt/vllm/serve" />
+          </label>
+          <label>
+            Args (one per line)
+            <textarea v-model="configForm.argsText" rows="4" placeholder="--model&#10;deepseek-ai/DeepSeek-R1"></textarea>
+          </label>
+          <label>
+            Env (KEY=VALUE per line)
+            <textarea v-model="configForm.envText" rows="4" placeholder="HF_HOME=/data/hf"></textarea>
+          </label>
+          <label>
+            Working dir
+            <input v-model="configForm.working_dir" type="text" placeholder="/opt/engines" />
+          </label>
+          <div class="config-inline">
+            <label>
+              <input v-model="configForm.auto_restart_enabled" type="checkbox" />
+              Auto restart
+            </label>
+            <label>
+              Max retries
+              <input v-model.number="configForm.auto_restart_max_retries" type="number" min="0" />
+            </label>
+            <label>
+              Backoff (sec)
+              <input v-model.number="configForm.auto_restart_backoff_secs" type="number" min="1" />
+            </label>
+          </div>
+          <div class="config-submit">
+            <button class="primary" type="submit">
+              {{ configMode === "create" ? "Create" : "Save changes" }}
+            </button>
+          </div>
+        </form>
       </div>
     </section>
 
@@ -139,6 +234,26 @@ type Host = {
   api_key: string;
 };
 
+type EnvVar = {
+  key: string;
+  value: string;
+};
+
+type EngineConfig = {
+  id: string;
+  name: string;
+  engine_type: "Vllm" | "LlamaCpp" | "KTransformers";
+  command: string;
+  args: string[];
+  env: EnvVar[];
+  working_dir?: string | null;
+  auto_restart: {
+    enabled: boolean;
+    max_retries: number;
+    backoff_secs: number;
+  };
+};
+
 type EngineInstance = {
   id: string;
   config_id: string;
@@ -176,6 +291,11 @@ const detailTab = ref<"live" | "history">("live");
 const historyMinutes = ref(120);
 const statusHistory = ref<EngineInstance[]>([]);
 const logHistory = ref<LogEntry[]>([]);
+const configHostId = ref<string | null>(null);
+const configs = ref<EngineConfig[]>([]);
+const configErrors = ref<string[]>([]);
+const configMode = ref<"create" | "edit">("create");
+const configForm = ref(createEmptyConfigForm());
 
 let ws: WebSocket | null = null;
 
@@ -203,6 +323,16 @@ async function refreshAll() {
     }
     engines.value = nextEngines;
     lastRefreshed.value = new Date().toLocaleTimeString();
+    if (
+      configHostId.value &&
+      !hosts.value.some((host) => host.id === configHostId.value)
+    ) {
+      configHostId.value = null;
+    }
+    if (!configHostId.value && hosts.value.length) {
+      configHostId.value = hosts.value[0].id;
+    }
+    await loadConfigs();
   } finally {
     loading.value = false;
   }
@@ -295,6 +425,178 @@ function clearLogs() {
 
 function statusClass(status: string) {
   return `status-${status.toLowerCase()}`;
+}
+
+function scrollToConfigs() {
+  document.getElementById("configs")?.scrollIntoView({ behavior: "smooth" });
+}
+
+function createEmptyConfigForm() {
+  return {
+    id: "",
+    name: "",
+    engine_type: "Vllm" as EngineConfig["engine_type"],
+    command: "",
+    argsText: "",
+    envText: "",
+    working_dir: "",
+    auto_restart_enabled: false,
+    auto_restart_max_retries: 0,
+    auto_restart_backoff_secs: 5
+  };
+}
+
+async function loadConfigs() {
+  configErrors.value = [];
+  if (!configHostId.value) {
+    configs.value = [];
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/hosts/${configHostId.value}/configs`);
+    if (!res.ok) {
+      configErrors.value = [`Failed to load configs (HTTP ${res.status})`];
+      configs.value = [];
+      return;
+    }
+    const body = (await res.json()) as { configs: EngineConfig[] };
+    configs.value = body.configs ?? [];
+  } catch (err) {
+    configErrors.value = [(err as Error).message];
+  }
+}
+
+function resetConfigForm() {
+  configMode.value = "create";
+  configForm.value = createEmptyConfigForm();
+}
+
+function editConfig(config: EngineConfig) {
+  configMode.value = "edit";
+  configForm.value = {
+    id: config.id,
+    name: config.name,
+    engine_type: config.engine_type,
+    command: config.command,
+    argsText: config.args.join("\n"),
+    envText: config.env.map((item) => `${item.key}=${item.value}`).join("\n"),
+    working_dir: config.working_dir ?? "",
+    auto_restart_enabled: config.auto_restart.enabled,
+    auto_restart_max_retries: config.auto_restart.max_retries,
+    auto_restart_backoff_secs: config.auto_restart.backoff_secs
+  };
+}
+
+async function saveConfig() {
+  configErrors.value = [];
+  if (!configHostId.value) {
+    configErrors.value = ["Select a host before saving."];
+    return;
+  }
+
+  const errors: string[] = [];
+  if (!configForm.value.id.trim()) {
+    errors.push("Config ID is required.");
+  }
+  if (!configForm.value.name.trim()) {
+    errors.push("Display name is required.");
+  }
+  if (!configForm.value.command.trim()) {
+    errors.push("Command is required.");
+  }
+
+  const envEntries = parseEnvLines(configForm.value.envText, errors);
+  if (errors.length) {
+    configErrors.value = errors;
+    return;
+  }
+
+  const config: EngineConfig = {
+    id: configForm.value.id.trim(),
+    name: configForm.value.name.trim(),
+    engine_type: configForm.value.engine_type,
+    command: configForm.value.command.trim(),
+    args: parseArgsLines(configForm.value.argsText),
+    env: envEntries,
+    working_dir: configForm.value.working_dir.trim()
+      ? configForm.value.working_dir.trim()
+      : null,
+    auto_restart: {
+      enabled: configForm.value.auto_restart_enabled,
+      max_retries: Number(configForm.value.auto_restart_max_retries) || 0,
+      backoff_secs: Number(configForm.value.auto_restart_backoff_secs) || 5
+    }
+  };
+
+  const method = configMode.value === "create" ? "POST" : "PUT";
+  const url =
+    configMode.value === "create"
+      ? `/api/hosts/${configHostId.value}/configs`
+      : `/api/hosts/${configHostId.value}/configs/${encodeURIComponent(config.id)}`;
+
+  const res = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config)
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    configErrors.value = [
+      body?.error ? `Save failed: ${body.error}` : `Save failed (HTTP ${res.status}).`
+    ];
+    return;
+  }
+
+  resetConfigForm();
+  await loadConfigs();
+  await refreshAll();
+}
+
+async function deleteConfig(config: EngineConfig) {
+  if (!configHostId.value) {
+    return;
+  }
+  if (!confirm(`Delete config ${config.name}?`)) {
+    return;
+  }
+  const res = await fetch(
+    `/api/hosts/${configHostId.value}/configs/${encodeURIComponent(config.id)}`,
+    { method: "DELETE" }
+  );
+  if (!res.ok) {
+    configErrors.value = [`Delete failed (HTTP ${res.status}).`];
+    return;
+  }
+  await loadConfigs();
+  await refreshAll();
+}
+
+function parseArgsLines(raw: string) {
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function parseEnvLines(raw: string, errors: string[]) {
+  const entries: EnvVar[] = [];
+  const lines = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    const index = line.indexOf("=");
+    if (index <= 0) {
+      errors.push(`Env line "${line}" must be KEY=VALUE.`);
+      continue;
+    }
+    entries.push({ key: line.slice(0, index), value: line.slice(index + 1) });
+  }
+
+  return entries;
 }
 
 // Initial load and cleanup.

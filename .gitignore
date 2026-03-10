@@ -24,3 +24,6 @@
 # Nix
 result
 result-*
+
+# development 
+mock

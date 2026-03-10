@@ -6,12 +6,12 @@ mod supervisor;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::{middleware, routing::get, routing::post, Router};
+use axum::{middleware, routing::get, routing::post, routing::put, Router};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::api::{
-    engine_logs, engine_logs_ws, engine_status_history, get_engine, health, list_engines,
-    start_engine, stop_engine,
+    create_config, delete_config, engine_logs, engine_logs_ws, engine_status_history, get_engine,
+    health, list_configs, list_engines, start_engine, stop_engine, update_config,
 };
 use crate::auth::auth_middleware;
 use crate::state::AppState;
@@ -24,19 +24,20 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Load engine configs (defaults to repo-relative path).
-    let config_path = std::env::var("AIMAN_ENGINES_CONFIG")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("configs/engines.toml"));
-
-    // Data dir holds JSONL logs/status history.
+    // Data dir holds JSONL logs/status history + config store.
     let data_dir = std::env::var("AIMAN_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("data"));
 
-    let supervisor = Supervisor::from_file(config_path, data_dir)
+    // Config store defaults to data/configs.json; seed optional from TOML if provided.
+    let config_path = std::env::var("AIMAN_CONFIG_STORE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| data_dir.join("configs.json"));
+    let seed_path = std::env::var("AIMAN_ENGINES_CONFIG").ok().map(PathBuf::from);
+
+    let supervisor = Supervisor::from_store(config_path, data_dir, seed_path)
         .await
-        .expect("load engine config");
+        .expect("load engine config store");
 
     let api_key = std::env::var("AIMAN_API_KEY").ok();
     let state = AppState {
@@ -47,6 +48,8 @@ async fn main() {
     // HTTP API surface for control + observability.
     let app = Router::new()
         .route("/health", get(health))
+        .route("/v1/configs", get(list_configs).post(create_config))
+        .route("/v1/configs/{id}", put(update_config).delete(delete_config))
         .route("/v1/engines", get(list_engines))
         .route("/v1/engines/{id}", get(get_engine))
         .route("/v1/engines/{id}/start", post(start_engine))

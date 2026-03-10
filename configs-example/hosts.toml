@@ -1,8 +1,8 @@
 [[host]]
 id = "llm-01"
 name = "LLM Server 01"
-base_url = "https://llm-01.lan:4010"
-api_key = "change-me"
+base_url = "http://localhost:4010"
+api_key = ""
 
 [[host]]
 id = "llm-02"
