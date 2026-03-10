@@ -5,18 +5,17 @@ use std::{
     time::Duration,
 };
 
-use aiman_shared::{
-    AutoRestart, EngineConfig, EngineInstance, EngineStatus, LogEntry, LogStream,
-};
+use aiman_shared::{AutoRestart, EngineConfig, EngineInstance, EngineStatus, LogEntry, LogStream};
 use axum::{
     extract::{Path, State, WebSocketUpgrade},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     middleware,
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 use chrono::Utc;
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -45,7 +44,11 @@ async fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("configs/engines.toml"));
 
-    let supervisor = Supervisor::from_file(config_path)
+    let data_dir = std::env::var("AIMAN_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("data"));
+
+    let supervisor = Supervisor::from_file(config_path, data_dir)
         .await
         .expect("load engine config");
 
@@ -61,8 +64,10 @@ async fn main() {
         .route("/v1/engines/:id", get(get_engine))
         .route("/v1/engines/:id/start", post(start_engine))
         .route("/v1/engines/:id/stop", post(stop_engine))
+        .route("/v1/engines/:id/logs", get(engine_logs))
         .route("/v1/engines/:id/logs/ws", get(engine_logs_ws))
-        .layer(middleware::from_fn(auth_middleware))
+        .route("/v1/engines/:id/status", get(engine_status_history))
+        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state.clone());
 
     let bind_addr = std::env::var("AIMAN_BIND").unwrap_or_else(|_| "0.0.0.0:4010".to_string());
@@ -80,7 +85,6 @@ async fn health() -> &'static str {
 
 async fn auth_middleware(
     State(state): State<AppState>,
-    headers: HeaderMap,
     request: axum::http::Request<axum::body::Body>,
     next: middleware::Next,
 ) -> Result<axum::response::Response, StatusCode> {
@@ -88,7 +92,8 @@ async fn auth_middleware(
         return Ok(next.run(request).await);
     };
 
-    let provided = headers
+    let provided = request
+        .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "));
@@ -183,7 +188,7 @@ async fn engine_logs_ws(
                         }
                     }
                 }
-                msg = receiver.recv() => {
+                msg = receiver.next() => {
                     if msg.is_none() {
                         break;
                     }
@@ -194,6 +199,48 @@ async fn engine_logs_ws(
     }))
 }
 
+#[derive(Deserialize)]
+struct LogQuery {
+    since: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn engine_logs(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<LogQuery>,
+) -> Result<Json<LogHistoryResponse>, StatusCode> {
+    let handle = state
+        .supervisor
+        .get_handle(&id)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let entries = read_jsonl(&handle.log_path, query.since.as_deref(), query.limit)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(LogHistoryResponse { entries }))
+}
+
+async fn engine_status_history(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<LogQuery>,
+) -> Result<Json<StatusHistoryResponse>, StatusCode> {
+    let handle = state
+        .supervisor
+        .get_handle(&id)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let entries = read_jsonl(&handle.status_path, query.since.as_deref(), query.limit)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(StatusHistoryResponse { entries }))
+}
+
 #[derive(Serialize)]
 struct EnginesResponse {
     engines: Vec<EngineInstance>,
@@ -202,6 +249,16 @@ struct EnginesResponse {
 #[derive(Serialize)]
 struct EngineResponse {
     instance: EngineInstance,
+}
+
+#[derive(Serialize)]
+struct LogHistoryResponse {
+    entries: Vec<LogEntry>,
+}
+
+#[derive(Serialize)]
+struct StatusHistoryResponse {
+    entries: Vec<EngineInstance>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -232,16 +289,26 @@ struct Supervisor {
 }
 
 impl Supervisor {
-    async fn from_file(path: PathBuf) -> anyhow::Result<Self> {
+    async fn from_file(path: PathBuf, data_dir: PathBuf) -> anyhow::Result<Self> {
         let raw = tokio::fs::read_to_string(path).await?;
         let parsed: ConfigFile = toml::from_str(&raw)?;
         let mut configs = HashMap::new();
         let mut handles = HashMap::new();
 
+        tokio::fs::create_dir_all(data_dir.join("logs")).await?;
+        tokio::fs::create_dir_all(data_dir.join("status")).await?;
+
         for config in parsed.engine {
             let id = config.id.clone();
             configs.insert(id.clone(), config.clone());
-            handles.insert(id, Arc::new(EngineHandle::new(config)));
+            handles.insert(
+                id.clone(),
+                Arc::new(EngineHandle::new(
+                    config,
+                    data_dir.join("logs").join(format!("{id}.jsonl")),
+                    data_dir.join("status").join(format!("{id}.jsonl")),
+                )),
+            );
         }
 
         Ok(Self {
@@ -262,7 +329,8 @@ impl Supervisor {
     async fn get_instance(&self, id: &str) -> Option<EngineInstance> {
         let handles = self.handles.read().await;
         let handle = handles.get(id)?.clone();
-        Some(handle.instance.read().await.clone())
+        let instance = handle.instance.read().await.clone();
+        Some(instance)
     }
 
     async fn get_handle(&self, id: &str) -> Option<Arc<EngineHandle>> {
@@ -273,13 +341,15 @@ impl Supervisor {
     async fn start(&self, id: &str) -> Result<EngineInstance, SupervisorError> {
         let handle = self.get_handle(id).await.ok_or(SupervisorError::NotFound)?;
         handle.start().await?;
-        Ok(handle.instance.read().await.clone())
+        let instance = handle.instance.read().await.clone();
+        Ok(instance)
     }
 
     async fn stop(&self, id: &str) -> Result<EngineInstance, SupervisorError> {
         let handle = self.get_handle(id).await.ok_or(SupervisorError::NotFound)?;
         handle.stop().await?;
-        Ok(handle.instance.read().await.clone())
+        let instance = handle.instance.read().await.clone();
+        Ok(instance)
     }
 }
 
@@ -294,6 +364,10 @@ struct EngineHandle {
     log_buffer: Arc<Mutex<VecDeque<LogEntry>>>,
     log_tx: broadcast::Sender<LogEntry>,
     control: Mutex<EngineControl>,
+    log_path: PathBuf,
+    status_path: PathBuf,
+    log_write_lock: Arc<Mutex<()>>,
+    status_write_lock: Arc<Mutex<()>>,
 }
 
 struct EngineControl {
@@ -302,7 +376,7 @@ struct EngineControl {
 }
 
 impl EngineHandle {
-    fn new(config: EngineConfig) -> Self {
+    fn new(config: EngineConfig, log_path: PathBuf, status_path: PathBuf) -> Self {
         let instance = EngineInstance {
             id: config.id.clone(),
             config_id: config.id.clone(),
@@ -325,6 +399,10 @@ impl EngineHandle {
                 stop_tx: None,
                 task: None,
             }),
+            log_path,
+            status_path,
+            log_write_lock: Arc::new(Mutex::new(())),
+            status_write_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -350,7 +428,7 @@ impl EngineHandle {
     }
 
     async fn stop(&self) -> Result<(), SupervisorError> {
-        let mut control = self.control.lock().await;
+        let control = self.control.lock().await;
         let Some(stop_tx) = &control.stop_tx else {
             return Err(SupervisorError::NotRunning);
         };
@@ -364,6 +442,10 @@ impl EngineHandle {
             instance: self.instance.clone(),
             log_buffer: self.log_buffer.clone(),
             log_tx: self.log_tx.clone(),
+            log_path: self.log_path.clone(),
+            status_path: self.status_path.clone(),
+            log_write_lock: self.log_write_lock.clone(),
+            status_write_lock: self.status_write_lock.clone(),
         }
     }
 }
@@ -374,6 +456,10 @@ struct EngineTaskHandle {
     instance: Arc<RwLock<EngineInstance>>,
     log_buffer: Arc<Mutex<VecDeque<LogEntry>>>,
     log_tx: broadcast::Sender<LogEntry>,
+    log_path: PathBuf,
+    status_path: PathBuf,
+    log_write_lock: Arc<Mutex<()>>,
+    status_write_lock: Arc<Mutex<()>>,
 }
 
 async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<bool>) {
@@ -489,6 +575,7 @@ async fn stream_logs<R: tokio::io::AsyncRead + Unpin>(
             buffer.push_back(entry.clone());
         }
 
+        append_jsonl(&handle.log_path, &handle.log_write_lock, &entry).await;
         let _ = handle.log_tx.send(entry);
     }
 }
@@ -507,6 +594,9 @@ async fn set_status(
     if let Some(started_at) = started_at {
         instance.started_at = Some(started_at);
     }
+    let snapshot = instance.clone();
+    drop(instance);
+    append_jsonl(&handle.status_path, &handle.status_write_lock, &snapshot).await;
 }
 
 async fn set_exit_status(handle: &EngineTaskHandle, code: Option<i32>) {
@@ -515,6 +605,9 @@ async fn set_exit_status(handle: &EngineTaskHandle, code: Option<i32>) {
     instance.pid = None;
     instance.last_exit_code = code;
     instance.last_exit_at = Some(now());
+    let snapshot = instance.clone();
+    drop(instance);
+    append_jsonl(&handle.status_path, &handle.status_write_lock, &snapshot).await;
 }
 
 fn should_restart(policy: &AutoRestart, retries: u32) -> bool {
@@ -523,4 +616,64 @@ fn should_restart(policy: &AutoRestart, retries: u32) -> bool {
 
 fn now() -> String {
     Utc::now().to_rfc3339()
+}
+
+async fn append_jsonl<T: Serialize>(path: &PathBuf, lock: &Arc<Mutex<()>>, value: &T) {
+    let _guard = lock.lock().await;
+    if let Ok(line) = serde_json::to_string(value) {
+        if let Ok(mut file) = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await
+        {
+            use tokio::io::AsyncWriteExt;
+            let _ = file.write_all(line.as_bytes()).await;
+            let _ = file.write_all(b"\n").await;
+        }
+    }
+}
+
+async fn read_jsonl<T: for<'de> Deserialize<'de>>(
+    path: &PathBuf,
+    since: Option<&str>,
+    limit: Option<usize>,
+) -> anyhow::Result<Vec<T>> {
+    let file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let since_dt = since.and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok());
+
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut entries: VecDeque<T> = VecDeque::new();
+    let max = limit.unwrap_or(500);
+
+    while let Ok(Some(line)) = lines.next_line().await {
+        if let Ok(entry) = serde_json::from_str::<T>(&line) {
+            if let Some(since_dt) = since_dt {
+                if let Some(ts) = extract_ts(&line) {
+                    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&ts) {
+                        if parsed < since_dt {
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            if entries.len() >= max {
+                entries.pop_front();
+            }
+            entries.push_back(entry);
+        }
+    }
+
+    Ok(entries.into_iter().collect())
+}
+
+fn extract_ts(line: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    value.get("ts")?.as_str().map(|s| s.to_string())
 }

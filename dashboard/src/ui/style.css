@@ -121,7 +121,8 @@ h2 {
 
 .primary,
 .secondary,
-.ghost {
+.ghost,
+.tab {
   border: none;
   padding: 10px 16px;
   border-radius: 999px;
@@ -145,16 +146,28 @@ h2 {
   color: var(--danger);
 }
 
+.tab {
+  background: rgba(17, 17, 17, 0.08);
+  color: var(--ink);
+}
+
+.tab.active {
+  background: var(--accent);
+  color: white;
+}
+
 .primary:hover,
 .secondary:hover,
-.ghost:hover {
+.ghost:hover,
+.tab:hover {
   transform: translateY(-1px);
   box-shadow: 0 10px 20px rgba(15, 15, 15, 0.12);
 }
 
 .primary:disabled,
 .secondary:disabled,
-.ghost:disabled {
+.ghost:disabled,
+.tab:disabled {
   opacity: 0.6;
   cursor: not-allowed;
   box-shadow: none;
@@ -239,14 +252,16 @@ h2 {
   border-color: rgba(242, 182, 70, 0.4);
 }
 
-.logs {
+.logs,
+.history {
   background: rgba(17, 17, 17, 0.04);
   border-radius: 16px;
   padding: 16px;
   min-height: 200px;
 }
 
-.log-lines {
+.log-lines,
+.history-list {
   font-family: "SFMono-Regular", "JetBrains Mono", monospace;
   font-size: 0.85rem;
   display: flex;
@@ -254,6 +269,38 @@ h2 {
   gap: 6px;
   max-height: 280px;
   overflow: auto;
+}
+
+.history-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.history-controls select {
+  margin-left: 8px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(17, 17, 17, 0.2);
+}
+
+.history-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.history-card {
+  background: white;
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 12px 20px rgba(15, 15, 15, 0.08);
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
 }
 
 .empty {
@@ -273,5 +320,9 @@ h2 {
   .panel-head {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .tabs {
+    width: 100%;
   }
 }

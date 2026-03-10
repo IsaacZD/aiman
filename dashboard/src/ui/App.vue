@@ -59,18 +59,70 @@
     <section class="panel">
       <div class="panel-head">
         <div>
-          <h2>Live logs</h2>
+          <h2>Engine detail</h2>
           <p class="panel-sub">
             {{ selected ? `${selected.host.name} • ${selected.instance.id}` : "Pick an engine" }}
           </p>
         </div>
-        <button class="secondary" @click="clearLogs" :disabled="!selected">Clear</button>
+        <div class="tabs">
+          <button
+            class="tab"
+            :class="{ active: detailTab === 'live' }"
+            @click="detailTab = 'live'"
+          >
+            Live logs
+          </button>
+          <button
+            class="tab"
+            :class="{ active: detailTab === 'history' }"
+            @click="detailTab = 'history'"
+          >
+            History
+          </button>
+        </div>
       </div>
 
-      <div class="logs">
+      <div v-if="detailTab === 'live'" class="logs">
         <p v-if="!selected" class="empty">Select an engine to stream logs.</p>
         <div v-else class="log-lines">
           <p v-for="(line, idx) in logs" :key="idx">{{ line }}</p>
+        </div>
+      </div>
+
+      <div v-else class="history">
+        <div class="history-controls">
+          <label>
+            Show last
+            <select v-model.number="historyMinutes" @change="loadHistory">
+              <option :value="30">30 minutes</option>
+              <option :value="120">2 hours</option>
+              <option :value="360">6 hours</option>
+              <option :value="1440">24 hours</option>
+            </select>
+          </label>
+          <button class="secondary" @click="loadHistory" :disabled="!selected">
+            Load history
+          </button>
+        </div>
+        <div class="history-grid">
+          <div class="history-card">
+            <h3>Status history</h3>
+            <div class="history-list">
+              <p v-if="!statusHistory.length" class="empty">No status entries.</p>
+              <p v-for="(item, idx) in statusHistory" :key="idx">
+                [{{ item.ts }}] {{ item.status }} (PID {{ item.pid ?? "—" }})
+              </p>
+            </div>
+          </div>
+          <div class="history-card">
+            <h3>Log history</h3>
+            <div class="history-list">
+              <p v-if="!logHistory.length" class="empty">No log entries.</p>
+              <p v-for="(item, idx) in logHistory" :key="idx">
+                [{{ item.ts }}] {{ item.stream }}: {{ item.line }}
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -92,6 +144,7 @@ type EngineInstance = {
   config_id: string;
   status: string;
   pid?: number | null;
+  ts?: string;
 };
 
 type EngineItem = {
@@ -105,6 +158,12 @@ type EnginesResult = {
   error?: string;
 };
 
+type LogEntry = {
+  ts: string;
+  stream: string;
+  line: string;
+};
+
 const hosts = ref<Host[]>([]);
 const engines = ref<EngineItem[]>([]);
 const selected = ref<EngineItem | null>(null);
@@ -112,6 +171,10 @@ const logs = ref<string[]>([]);
 const errors = ref<string[]>([]);
 const loading = ref(false);
 const lastRefreshed = ref<string | null>(null);
+const detailTab = ref<"live" | "history">("live");
+const historyMinutes = ref(120);
+const statusHistory = ref<EngineInstance[]>([]);
+const logHistory = ref<LogEntry[]>([]);
 
 let ws: WebSocket | null = null;
 
@@ -159,7 +222,12 @@ async function stopEngine(engine: EngineItem) {
 
 function selectEngine(engine: EngineItem) {
   selected.value = engine;
-  connectLogs();
+  if (detailTab.value === "live") {
+    connectLogs();
+  }
+  if (detailTab.value === "history") {
+    loadHistory();
+  }
 }
 
 function connectLogs() {
@@ -186,6 +254,33 @@ function connectLogs() {
       logs.value.push(event.data);
     }
   };
+}
+
+async function loadHistory() {
+  if (!selected.value) {
+    return;
+  }
+
+  const since = new Date(Date.now() - historyMinutes.value * 60 * 1000).toISOString();
+  const { host, instance } = selected.value;
+  const [statusRes, logsRes] = await Promise.all([
+    fetch(
+      `/api/hosts/${host.id}/engines/${instance.id}/status?since=${encodeURIComponent(since)}&limit=300`
+    ),
+    fetch(
+      `/api/hosts/${host.id}/engines/${instance.id}/logs?since=${encodeURIComponent(since)}&limit=500`
+    )
+  ]);
+
+  if (statusRes.ok) {
+    const body = (await statusRes.json()) as { entries: EngineInstance[] };
+    statusHistory.value = body.entries ?? [];
+  }
+
+  if (logsRes.ok) {
+    const body = (await logsRes.json()) as { entries: LogEntry[] };
+    logHistory.value = body.entries ?? [];
+  }
 }
 
 function clearLogs() {

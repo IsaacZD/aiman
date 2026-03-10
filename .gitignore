@@ -1,0 +1,26 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Node/Vite
+/dashboard/node_modules
+/dashboard/dist
+/dashboard/.vite
+
+# direnv
+.direnv
+.envrc
+
+# Logs & runtime data
+/data
+*.log
+*.jsonl
+
+# Editor
+.DS_Store
+.idea
+.vscode
+
+# Nix
+result
+result-*
