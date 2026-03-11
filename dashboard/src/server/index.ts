@@ -120,6 +120,21 @@ server.get("/api/hosts/:hostId/models", async (request, reply) => {
   return reply.code(res.status).send(body ?? { ok: res.ok });
 });
 
+// Proxy hardware info for a selected host.
+server.get("/api/hosts/:hostId/hardware", async (request, reply) => {
+  const { hostId } = request.params as { hostId: string };
+  const host = await findHost(hostId);
+  if (!host) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+
+  const res = await fetch(`${host.base_url}/v1/hardware`, {
+    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
+  });
+  const body = await safeJson(res);
+  return reply.code(res.status).send(body ?? { ok: res.ok });
+});
+
 // Aggregate engine lists across all configured hosts.
 server.get("/api/engines", async () => {
   const hosts = await loadHosts();

@@ -29,7 +29,7 @@
       <div class="panel-head">
         <div>
           <h2>Engines</h2>
-          <p class="panel-sub">{{ engines.length }} configured engine(s)</p>
+          <p class="panel-sub">{{ engineCount }} configured engine(s)</p>
         </div>
         <div class="panel-actions">
           <button class="primary" @click="refreshAll" :disabled="loading">
@@ -42,31 +42,89 @@
         <p v-for="error in errors" :key="error">{{ error }}</p>
       </div>
 
-      <div class="grid">
-        <article
-          v-for="engine in engines"
-          :key="engine.instance.id"
-          class="engine"
-          :class="statusClass(engine.instance.status)"
-          @click="openDetailModal(engine)"
-        >
-          <span
-            class="status-dot"
-            :class="statusDotClass(engine.instance.status)"
-          ></span>
-          <header>
-            <p class="engine-host">{{ engine.host.name }}</p>
-            <h3>{{ engine.configName ?? engine.instance.id }}</h3>
-            <p class="engine-type">{{ engine.instance.config_id }}</p>
-          </header>
-          <div class="engine-meta">
-            <span class="pill">PID {{ engine.instance.pid ?? "—" }}</span>
+      <div class="host-sections">
+        <section v-for="host in hosts" :key="host.id" class="host-section">
+          <div class="host-header">
+            <div>
+              <h3>{{ host.name }}</h3>
+              <p class="host-meta">{{ host.id }} • {{ host.base_url }}</p>
+            </div>
+            <div class="hardware-card">
+              <p class="hardware-title">Hardware</p>
+              <template v-if="hardwareByHost[host.id]">
+                <div class="hardware-grid">
+                  <div class="hardware-item">
+                    <span class="hardware-label">CPU</span>
+                    <span class="hardware-value">
+                      {{ formatCpu(hardwareByHost[host.id]) }}
+                    </span>
+                  </div>
+                  <div class="hardware-item">
+                    <span class="hardware-label">Memory</span>
+                    <span class="hardware-value">
+                      {{ formatMemory(hardwareByHost[host.id]) }}
+                    </span>
+                  </div>
+                  <div class="hardware-item">
+                    <span class="hardware-label">OS</span>
+                    <span class="hardware-value">
+                      {{ formatOs(hardwareByHost[host.id]) }}
+                    </span>
+                  </div>
+                  <div class="hardware-item">
+                    <span class="hardware-label">GPU</span>
+                    <span class="hardware-value">
+                      {{ formatGpus(hardwareByHost[host.id]) }}
+                    </span>
+                  </div>
+                  <div class="hardware-item">
+                    <span class="hardware-label">Uptime</span>
+                    <span class="hardware-value">
+                      {{ formatUptime(hardwareByHost[host.id]) }}
+                    </span>
+                  </div>
+                </div>
+              </template>
+              <p v-else class="hardware-empty">No hardware data.</p>
+            </div>
           </div>
-          <div class="engine-actions">
-            <button class="secondary" @click.stop="startEngine(engine)">Start</button>
-            <button class="ghost" @click.stop="stopEngine(engine)">Stop</button>
+          <div v-if="hardwareErrorsByHost[host.id]" class="alert">
+            {{ hardwareErrorsByHost[host.id] }}
           </div>
-        </article>
+          <div v-if="engineResultsByHost[host.id]?.error" class="alert">
+            {{ host.name }}: {{ engineResultsByHost[host.id].error }}
+          </div>
+          <div class="grid">
+            <article
+              v-for="engine in enginesByHost[host.id] ?? []"
+              :key="engine.instance.id"
+              class="engine"
+              :class="statusClass(engine.instance.status)"
+              @click="openDetailModal(engine)"
+            >
+              <span
+                class="status-dot"
+                :class="statusDotClass(engine.instance.status)"
+              ></span>
+              <header>
+                <p class="engine-host">{{ engine.host.name }}</p>
+                <h3>{{ engine.configName ?? engine.instance.id }}</h3>
+                <p class="engine-type">{{ engine.instance.config_id }}</p>
+              </header>
+              <div class="engine-meta">
+                <span class="pill">PID {{ engine.instance.pid ?? "—" }}</span>
+              </div>
+              <div class="engine-actions">
+                <button class="secondary" @click.stop="startEngine(engine)">Start</button>
+                <button class="ghost" @click.stop="stopEngine(engine)">Stop</button>
+              </div>
+            </article>
+          </div>
+          <p v-if="!(enginesByHost[host.id]?.length)" class="empty">
+            No engines configured for this host.
+          </p>
+        </section>
+        <p v-if="!hosts.length" class="empty">No hosts yet.</p>
       </div>
     </section>
 
@@ -426,6 +484,28 @@ type ModelArtifact = {
   library: string;
 };
 
+type HardwareInfo = {
+  hostname?: string | null;
+  os_name?: string | null;
+  os_version?: string | null;
+  kernel_version?: string | null;
+  cpu_brand?: string | null;
+  cpu_cores_logical?: number | null;
+  cpu_cores_physical?: number | null;
+  cpu_frequency_mhz?: number | null;
+  memory_total_kb?: number | null;
+  memory_available_kb?: number | null;
+  swap_total_kb?: number | null;
+  swap_free_kb?: number | null;
+  uptime_seconds?: number | null;
+  gpus?: {
+    name?: string | null;
+    vendor?: string | null;
+    memory_total_mb?: number | null;
+    driver_version?: string | null;
+  }[];
+};
+
 // High-level UI state.
 const hosts = ref<Host[]>([]);
 const engines = ref<EngineItem[]>([]);
@@ -438,6 +518,10 @@ const mainTab = ref<"engines" | "admin">("engines");
 const historyMinutes = ref(120);
 const statusHistory = ref<EngineInstance[]>([]);
 const logHistory = ref<LogEntry[]>([]);
+const hardwareByHost = ref<Record<string, HardwareInfo | null>>({});
+const hardwareErrorsByHost = ref<Record<string, string>>({});
+const engineResultsByHost = ref<Record<string, EnginesResult>>({});
+const configNameByHost = ref<Record<string, Record<string, string>>>({});
 const showDetailModal = ref(false);
 const configHostId = ref<string | null>(null);
 const configs = ref<EngineConfig[]>([]);
@@ -466,6 +550,26 @@ const vllmModelOptions = computed(() =>
 const ggufModelOptions = computed(() =>
   modelArtifacts.value.filter((artifact) => artifact.kind === "gguf")
 );
+const engineCount = computed(() => engines.value.length);
+const enginesByHost = computed(() => {
+  const grouped: Record<string, EngineItem[]> = {};
+  for (const host of hosts.value) {
+    grouped[host.id] = [];
+  }
+  for (const engine of engines.value) {
+    const hostId = engine.host.id;
+    if (!grouped[hostId]) {
+      grouped[hostId] = [];
+    }
+    grouped[hostId].push(engine);
+  }
+  for (const list of Object.values(grouped)) {
+    list.sort((a, b) =>
+      (a.configName ?? a.instance.id).localeCompare(b.configName ?? b.instance.id)
+    );
+  }
+  return grouped;
+});
 
 const defaultCommands: Record<EngineConfig["engine_type"], string> = {
   Vllm: "python",
@@ -496,49 +600,83 @@ async function refreshAll() {
   errors.value = [];
   try {
     const hostsRes = await fetch("/api/hosts");
+    if (!hostsRes.ok) {
+      errors.value = [`Failed to load hosts (HTTP ${hostsRes.status})`];
+      hosts.value = [];
+      engines.value = [];
+      engineResultsByHost.value = {};
+      return;
+    }
     const hostsBody = (await hostsRes.json()) as { hosts: Host[] };
     hosts.value = hostsBody.hosts ?? [];
     if (hosts.value.length && hostMode.value === "create" && !hostForm.value.id) {
       hostForm.value = createEmptyHostForm();
     }
 
-    const configNameByHost = new Map<string, Map<string, string>>();
+    const nextConfigNameByHost: Record<string, Record<string, string>> = {};
+    const nextHardwareByHost: Record<string, HardwareInfo | null> = {};
+    const nextHardwareErrors: Record<string, string> = {};
     await Promise.all(
       hosts.value.map(async (host) => {
         try {
           const res = await fetch(`/api/hosts/${host.id}/configs`);
           if (!res.ok) {
+            nextConfigNameByHost[host.id] = {};
             return;
           }
           const body = (await res.json()) as { configs: EngineConfig[] };
-          const map = new Map<string, string>();
+          const map: Record<string, string> = {};
           for (const config of body.configs ?? []) {
-            map.set(config.id, config.name);
+            map[config.id] = config.name;
           }
-          configNameByHost.set(host.id, map);
+          nextConfigNameByHost[host.id] = map;
         } catch {
           // Ignore config load failures here; engines list can still render.
+          nextConfigNameByHost[host.id] = {};
+        }
+
+        try {
+          const res = await fetch(`/api/hosts/${host.id}/hardware`);
+          if (!res.ok) {
+            nextHardwareErrors[host.id] = `Hardware unavailable (HTTP ${res.status}).`;
+            nextHardwareByHost[host.id] = null;
+            return;
+          }
+          const body = (await res.json()) as { hardware?: HardwareInfo };
+          nextHardwareByHost[host.id] = body.hardware ?? null;
+        } catch (err) {
+          nextHardwareErrors[host.id] = (err as Error).message;
+          nextHardwareByHost[host.id] = null;
         }
       })
     );
+    configNameByHost.value = nextConfigNameByHost;
+    hardwareByHost.value = nextHardwareByHost;
+    hardwareErrorsByHost.value = nextHardwareErrors;
 
     const enginesRes = await fetch("/api/engines");
+    if (!enginesRes.ok) {
+      errors.value = [`Failed to load engines (HTTP ${enginesRes.status})`];
+      engines.value = [];
+      engineResultsByHost.value = {};
+      return;
+    }
     const enginesBody = (await enginesRes.json()) as { results: EnginesResult[] };
 
     const nextEngines: EngineItem[] = [];
+    const nextEngineResultsByHost: Record<string, EnginesResult> = {};
     for (const result of enginesBody.results ?? []) {
+      nextEngineResultsByHost[result.host.id] = result;
       if (result.error) {
-        errors.value.push(`${result.host.name}: ${result.error}`);
         continue;
       }
       for (const instance of result.engines ?? []) {
-        const configName = configNameByHost
-          .get(result.host.id)
-          ?.get(instance.config_id);
+        const configName = configNameByHost.value[result.host.id]?.[instance.config_id];
         nextEngines.push({ host: result.host, instance, configName });
       }
     }
     engines.value = nextEngines;
+    engineResultsByHost.value = nextEngineResultsByHost;
     lastRefreshed.value = new Date().toLocaleTimeString();
     if (
       configHostId.value &&
@@ -663,6 +801,125 @@ function statusDotClass(status: string) {
     return "is-stopped";
   }
   return "is-unknown";
+}
+
+function formatCpu(info: HardwareInfo | null | undefined) {
+  if (!info) {
+    return "—";
+  }
+  const brand = info.cpu_brand?.trim();
+  const logical = info.cpu_cores_logical ?? null;
+  const physical = info.cpu_cores_physical ?? null;
+  const coreLabel = physical
+    ? `${physical}C/${logical ?? physical}T`
+    : logical
+    ? `${logical} threads`
+    : null;
+  const frequency = info.cpu_frequency_mhz ? `${info.cpu_frequency_mhz} MHz` : null;
+  const parts = [brand, coreLabel, frequency].filter(Boolean) as string[];
+  return parts.length ? parts.join(" • ") : "—";
+}
+
+function formatMemory(info: HardwareInfo | null | undefined) {
+  if (!info) {
+    return "—";
+  }
+  const total = formatBytesFromKb(info.memory_total_kb);
+  const free = formatBytesFromKb(info.memory_available_kb);
+  if (total && free) {
+    return `${total} total • ${free} free`;
+  }
+  return total ?? free ?? "—";
+}
+
+function formatOs(info: HardwareInfo | null | undefined) {
+  if (!info) {
+    return "—";
+  }
+  const parts = [info.os_name, info.os_version].filter(Boolean);
+  const os = parts.length ? parts.join(" ") : null;
+  const kernel = info.kernel_version ? `kernel ${info.kernel_version}` : null;
+  return [os, kernel].filter(Boolean).join(" • ") || "—";
+}
+
+function formatGpus(info: HardwareInfo | null | undefined) {
+  const gpus = info?.gpus ?? [];
+  if (!gpus.length) {
+    return "—";
+  }
+  const grouped = new Map<string, { count: number; memoryLabel?: string }>();
+  for (const gpu of gpus) {
+    const name = gpu.name?.trim() || gpu.vendor?.trim() || "GPU";
+    const memoryLabel = gpu.memory_total_mb ? formatBytesFromMb(gpu.memory_total_mb) : undefined;
+    const key = memoryLabel ? `${name} (${memoryLabel})` : name;
+    const entry = grouped.get(key);
+    if (entry) {
+      entry.count += 1;
+    } else {
+      grouped.set(key, { count: 1, memoryLabel });
+    }
+  }
+  const labels = Array.from(grouped.entries()).map(([label, info]) =>
+    info.count > 1 ? `${label} x${info.count}` : label
+  );
+  return labels.join(" • ");
+}
+
+function formatUptime(info: HardwareInfo | null | undefined) {
+  if (!info) {
+    return "—";
+  }
+  return formatDuration(info.uptime_seconds);
+}
+
+function formatDuration(totalSeconds: number | null | undefined) {
+  if (totalSeconds === null || totalSeconds === undefined) {
+    return "—";
+  }
+  let seconds = Math.max(0, Math.floor(totalSeconds));
+  const days = Math.floor(seconds / 86400);
+  seconds -= days * 86400;
+  const hours = Math.floor(seconds / 3600);
+  seconds -= hours * 3600;
+  const minutes = Math.floor(seconds / 60);
+  const parts: string[] = [];
+  if (days) {
+    parts.push(`${days}d`);
+  }
+  if (hours) {
+    parts.push(`${hours}h`);
+  }
+  if (!parts.length) {
+    parts.push(`${minutes}m`);
+  } else if (parts.length < 2 && minutes) {
+    parts.push(`${minutes}m`);
+  }
+  return parts.join(" ");
+}
+
+function formatBytesFromKb(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const gib = value / 1024 / 1024;
+  if (gib >= 100) {
+    return `${Math.round(gib)} GB`;
+  }
+  if (gib >= 10) {
+    return `${gib.toFixed(1)} GB`;
+  }
+  return `${gib.toFixed(2)} GB`;
+}
+
+function formatBytesFromMb(value: number) {
+  const gib = value / 1024;
+  if (gib >= 100) {
+    return `${Math.round(gib)} GB`;
+  }
+  if (gib >= 10) {
+    return `${gib.toFixed(1)} GB`;
+  }
+  return `${gib.toFixed(2)} GB`;
 }
 
 function createEmptyHostForm() {

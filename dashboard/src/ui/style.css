@@ -206,6 +206,77 @@ h2 {
   gap: 16px;
 }
 
+.host-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.host-section {
+  background: rgba(8, 12, 20, 0.6);
+  border-radius: 20px;
+  padding: 20px;
+  border: 1px solid rgba(90, 115, 160, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.host-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.hardware-card {
+  background: rgba(8, 12, 20, 0.9);
+  border-radius: 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(90, 115, 160, 0.2);
+  min-width: 260px;
+  flex: 1;
+}
+
+.hardware-title {
+  margin: 0 0 8px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.hardware-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px 16px;
+}
+
+.hardware-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hardware-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.hardware-value {
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
+.hardware-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .engine {
   background: rgba(8, 12, 20, 0.9);
   border-radius: 20px;
@@ -714,5 +785,13 @@ h2 {
 
   .host-grid {
     grid-template-columns: 1fr;
+  }
+
+  .host-header {
+    flex-direction: column;
+  }
+
+  .hardware-card {
+    width: 100%;
   }
 }

@@ -12,7 +12,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::api::{
     create_config, delete_config, engine_logs, engine_logs_ws, engine_status_history, get_engine,
-    health, list_configs, list_engines, scan_models, start_engine, stop_engine, update_config,
+    hardware_info, health, list_configs, list_engines, scan_models, start_engine, stop_engine,
+    update_config,
 };
 use crate::auth::auth_middleware;
 use crate::state::AppState;
@@ -63,6 +64,7 @@ async fn main() {
     // HTTP API surface for control + observability.
     let app = Router::new()
         .route("/health", get(health))
+        .route("/v1/hardware", get(hardware_info))
         .route("/v1/configs", get(list_configs).post(create_config))
         .route("/v1/configs/{id}", put(update_config).delete(delete_config))
         .route("/v1/engines", get(list_engines))
