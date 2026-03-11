@@ -152,6 +152,6 @@ in
 
     systemd.tmpfiles.rules = tmpRules;
 
-    networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ hostPort.value ];
+    networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
   };
 }
