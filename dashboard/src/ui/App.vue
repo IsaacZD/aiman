@@ -681,6 +681,7 @@ type EnvVar = {
 type EngineConfig = {
   id: string;
   name: string;
+  // Keep in sync with server + shared EngineType for round-trip safety.
   engine_type:
     | "Vllm"
     | "LlamaCpp"
@@ -926,6 +927,7 @@ const enginesByHost = computed(() => {
   return grouped;
 });
 
+// Defaults keep the config form helpful without forcing a full command line.
 const defaultCommands: Record<EngineConfig["engine_type"], string> = {
   Vllm: "python",
   Lvllm: "lvllm",
@@ -1549,6 +1551,7 @@ function resetConfigForm() {
     id: generateConfigId()
   };
   configOriginalId.value = null;
+  // Keep arg forms in sync with engine templates so switching types is cheap.
   vllmArgsForm.value = createVllmArgsForm();
   llamaCppArgsForm.value = createLlamaCppArgsForm();
   fastllmArgsForm.value = createFastllmArgsForm();
@@ -1628,6 +1631,7 @@ function editConfig(config: EngineConfig) {
     auto_restart_max_retries: config.auto_restart.max_retries,
     auto_restart_backoff_secs: config.auto_restart.backoff_secs
   };
+  // Parse args into the right template so the form mirrors existing configs.
   if (config.engine_type === "Vllm" || config.engine_type === "Lvllm") {
     vllmArgsForm.value = parseVllmArgs(config.args ?? []);
   } else if (config.engine_type === "LlamaCpp" || config.engine_type === "ik_llamacpp") {
@@ -1666,6 +1670,7 @@ async function saveConfig() {
   }
 
   let args: string[] = [];
+  // Build args from the template-specific form, keeping unknown flags in extraArgsText.
   if (configForm.value.engine_type === "Vllm" || configForm.value.engine_type === "Lvllm") {
     args = buildVllmArgs(vllmArgsForm.value);
   } else if (

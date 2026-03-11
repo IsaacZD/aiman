@@ -22,6 +22,7 @@ type HostsFile = {
 type EngineConfig = {
   id: string;
   name: string;
+  // Keep in sync with crates/shared EngineType (string values serialized over the wire).
   engine_type: "Vllm" | "LlamaCpp" | "ik_llamacpp" | "Lvllm" | "fastllm" | "KTransformers" | "Custom";
   command: string;
   args: string[];
@@ -992,6 +993,7 @@ function parseArgValue(args: string[], key: string) {
 }
 
 function defaultPort(engineType: EngineConfig["engine_type"]) {
+  // Defaults mirror engine vendors to make benchmark inference sensible.
   if (engineType === "LlamaCpp" || engineType === "ik_llamacpp") {
     return 8080;
   }

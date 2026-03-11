@@ -489,8 +489,11 @@ fn parse_arg_value(args: &[String], key: &str) -> Option<String> {
 
 fn default_port(engine_type: &EngineType) -> u16 {
     match engine_type {
+        // Llama.cpp-derived servers typically default to 8080.
         EngineType::LlamaCpp | EngineType::IkLlamaCpp => 8080,
+        // FastLLM uses 8080 in its default server example.
         EngineType::Fastllm => 8080,
+        // vLLM + most others default to 8000.
         _ => 8000,
     }
 }

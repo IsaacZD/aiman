@@ -38,6 +38,7 @@ const props = defineProps<{
   modelOptions?: ModelOption[];
   openModelPicker?: (onSelect: (path: string) => void) => void;
 }>();
+// Reuse the shared model picker, but keep the label text FastLLM-specific.
 const form = defineModel<FastllmArgsForm>({ required: true });
 const modelOptions = computed(() => props.modelOptions ?? []);
 

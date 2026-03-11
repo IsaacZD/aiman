@@ -92,6 +92,7 @@ pub async fn collect_hardware_info(
     skip_gpu: bool,
 ) -> HardwareInfo {
     let mut system = System::new();
+    // Only refresh what we read to keep collection cheap on repeated polling.
     system.refresh_cpu();
     system.refresh_memory();
     let gpus = collect_gpus(gpu_timeout, skip_gpu).await;
@@ -215,6 +216,8 @@ async fn run_command_with_timeout(
         .spawn()
         .ok()?;
 
+    // Capture stdout in a separate task so we can wait with a timeout without
+    // moving the child process handle.
     let stdout_handle = child.stdout.take().map(|mut stdout| {
         tokio::spawn(async move {
             let mut buffer = Vec::new();
@@ -226,6 +229,7 @@ async fn run_command_with_timeout(
     let status = match timeout(timeout_duration, child.wait()).await {
         Ok(Ok(status)) => status,
         _ => {
+            // Best-effort cleanup if the command stalls or errors.
             let _ = child.kill().await;
             let _ = child.wait().await;
             return None;

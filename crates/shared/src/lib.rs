@@ -1,5 +1,8 @@
 //! Shared data contracts between agent and dashboard.
 //! Keep this crate dependency-light so both sides can reuse it for schemas.
+//! Design note: engine_type strings are consumed by both the Rust agent and the
+//! dashboard UI, so renames should be additive and serialized names should be
+//! explicit when the on-wire value differs from the Rust enum variant.
 
 use serde::{Deserialize, Serialize};
 

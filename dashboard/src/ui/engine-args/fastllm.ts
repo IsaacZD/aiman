@@ -16,10 +16,12 @@ export function createFastllmArgsForm(): FastllmArgsForm {
 
 export function parseFastllmArgs(args: string[]): FastllmArgsForm {
   let rest = [...args];
+  // FastLLM CLI uses a "server" subcommand, so treat it as implicit.
   if (rest[0] === "server") {
     rest = rest.slice(1);
   }
 
+  // The model path/name is positional (first non-flag argument).
   let modelPath = "";
   if (rest.length && !rest[0].startsWith("-")) {
     modelPath = rest[0];
