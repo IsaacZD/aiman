@@ -18,11 +18,11 @@ use crate::api::{
     list_engines, scan_models, start_engine, stop_engine, update_config,
 };
 use crate::auth::auth_middleware;
+use crate::hardware::HardwareCache;
 use crate::state::AppState;
 use crate::supervisor::Supervisor;
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::registry()
@@ -30,6 +30,22 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    let worker_threads = std::env::var("AIMAN_TOKIO_WORKERS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0);
+
+    let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
+    runtime_builder.enable_all().thread_name("aiman-agent");
+    if let Some(count) = worker_threads {
+        runtime_builder.worker_threads(count);
+    }
+
+    let runtime = runtime_builder
+        .build()
+        .expect("build tokio runtime");
+
+    runtime.block_on(async {
     // Data dir holds JSONL logs/status history + config store.
     let data_dir = std::env::var("AIMAN_DATA_DIR")
         .map(PathBuf::from)
@@ -61,6 +77,7 @@ async fn main() {
     let state = AppState {
         supervisor: Arc::new(supervisor),
         api_key,
+        hardware_cache: Arc::new(tokio::sync::Mutex::new(HardwareCache::from_env())),
     };
 
     // HTTP API surface for control + observability.
@@ -89,4 +106,5 @@ async fn main() {
 
     tracing::info!("aiman_agent listening on {bind_addr}");
     axum::serve(listener, app).await.expect("serve host");
+    });
 }

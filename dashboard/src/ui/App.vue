@@ -426,7 +426,10 @@
             Engine type
             <select v-model="configForm.engine_type">
               <option value="Vllm">Vllm</option>
+              <option value="Lvllm">Lvllm</option>
               <option value="LlamaCpp">LlamaCpp</option>
+              <option value="ik_llamacpp">ik_llamacpp</option>
+              <option value="fastllm">fastllm</option>
               <option value="KTransformers">KTransformers</option>
               <option value="Custom">Custom</option>
             </select>
@@ -437,7 +440,7 @@
           </label>
           <div class="engine-fields-panel">
             <VllmConfigFields
-              v-if="configForm.engine_type === 'Vllm'"
+              v-if="configForm.engine_type === 'Vllm' || configForm.engine_type === 'Lvllm'"
               v-model="vllmArgsForm"
               :model-options="vllmModelOptions"
               :open-model-picker="
@@ -445,11 +448,21 @@
               "
             />
             <LlamaCppConfigFields
-              v-else-if="configForm.engine_type === 'LlamaCpp'"
+              v-else-if="
+                configForm.engine_type === 'LlamaCpp' || configForm.engine_type === 'ik_llamacpp'
+              "
               v-model="llamaCppArgsForm"
               :model-options="ggufModelOptions"
               :open-model-picker="
                 (onSelect) => openModelPicker(ggufModelOptions, 'Select GGUF model', onSelect)
+              "
+            />
+            <FastllmConfigFields
+              v-else-if="configForm.engine_type === 'fastllm'"
+              v-model="fastllmArgsForm"
+              :model-options="vllmModelOptions"
+              :open-model-picker="
+                (onSelect) => openModelPicker(vllmModelOptions, 'Select FastLLM model', onSelect)
               "
             />
             <KTransformersConfigFields
@@ -623,6 +636,7 @@
 import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import VllmConfigFields from "./components/VllmConfigFields.vue";
 import LlamaCppConfigFields from "./components/LlamaCppConfigFields.vue";
+import FastllmConfigFields from "./components/FastllmConfigFields.vue";
 import KTransformersConfigFields from "./components/KTransformersConfigFields.vue";
 import CustomConfigFields from "./components/CustomConfigFields.vue";
 import {
@@ -635,6 +649,11 @@ import {
   createLlamaCppArgsForm,
   parseLlamaCppArgs
 } from "./engine-args/llamaCpp";
+import {
+  buildFastllmArgs,
+  createFastllmArgsForm,
+  parseFastllmArgs
+} from "./engine-args/fastllm";
 import {
   buildKTransformersArgs,
   createKTransformersArgsForm,
@@ -662,7 +681,14 @@ type EnvVar = {
 type EngineConfig = {
   id: string;
   name: string;
-  engine_type: "Vllm" | "LlamaCpp" | "KTransformers" | "Custom";
+  engine_type:
+    | "Vllm"
+    | "LlamaCpp"
+    | "ik_llamacpp"
+    | "Lvllm"
+    | "fastllm"
+    | "KTransformers"
+    | "Custom";
   command: string;
   args: string[];
   env: EnvVar[];
@@ -805,6 +831,7 @@ const configForm = ref(createEmptyConfigForm());
 const configOriginalId = ref<string | null>(null);
 const vllmArgsForm = ref(createVllmArgsForm());
 const llamaCppArgsForm = ref(createLlamaCppArgsForm());
+const fastllmArgsForm = ref(createFastllmArgsForm());
 const kTransformersArgsForm = ref(createKTransformersArgsForm());
 const customArgsForm = ref(createCustomArgsForm());
 const showConfigModal = ref(false);
@@ -901,7 +928,10 @@ const enginesByHost = computed(() => {
 
 const defaultCommands: Record<EngineConfig["engine_type"], string> = {
   Vllm: "python",
+  Lvllm: "lvllm",
   LlamaCpp: "llama-server",
+  ik_llamacpp: "ikllama-server",
+  fastllm: "ftllm",
   KTransformers: "ktransformers-server",
   Custom: ""
 };
@@ -1521,6 +1551,7 @@ function resetConfigForm() {
   configOriginalId.value = null;
   vllmArgsForm.value = createVllmArgsForm();
   llamaCppArgsForm.value = createLlamaCppArgsForm();
+  fastllmArgsForm.value = createFastllmArgsForm();
   kTransformersArgsForm.value = createKTransformersArgsForm();
   customArgsForm.value = createCustomArgsForm();
 }
@@ -1597,10 +1628,12 @@ function editConfig(config: EngineConfig) {
     auto_restart_max_retries: config.auto_restart.max_retries,
     auto_restart_backoff_secs: config.auto_restart.backoff_secs
   };
-  if (config.engine_type === "Vllm") {
+  if (config.engine_type === "Vllm" || config.engine_type === "Lvllm") {
     vllmArgsForm.value = parseVllmArgs(config.args ?? []);
-  } else if (config.engine_type === "LlamaCpp") {
+  } else if (config.engine_type === "LlamaCpp" || config.engine_type === "ik_llamacpp") {
     llamaCppArgsForm.value = parseLlamaCppArgs(config.args ?? []);
+  } else if (config.engine_type === "fastllm") {
+    fastllmArgsForm.value = parseFastllmArgs(config.args ?? []);
   } else if (config.engine_type === "KTransformers") {
     kTransformersArgsForm.value = parseKTransformersArgs(config.args ?? []);
   } else {
@@ -1633,10 +1666,15 @@ async function saveConfig() {
   }
 
   let args: string[] = [];
-  if (configForm.value.engine_type === "Vllm") {
+  if (configForm.value.engine_type === "Vllm" || configForm.value.engine_type === "Lvllm") {
     args = buildVllmArgs(vllmArgsForm.value);
-  } else if (configForm.value.engine_type === "LlamaCpp") {
+  } else if (
+    configForm.value.engine_type === "LlamaCpp" ||
+    configForm.value.engine_type === "ik_llamacpp"
+  ) {
     args = buildLlamaCppArgs(llamaCppArgsForm.value);
+  } else if (configForm.value.engine_type === "fastllm") {
+    args = buildFastllmArgs(fastllmArgsForm.value);
   } else if (configForm.value.engine_type === "KTransformers") {
     args = buildKTransformersArgs(kTransformersArgsForm.value);
   } else {

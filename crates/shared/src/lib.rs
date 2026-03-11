@@ -28,6 +28,11 @@ pub struct EnvVar {
 pub enum EngineType {
     Vllm,
     LlamaCpp,
+    #[serde(rename = "ik_llamacpp")]
+    IkLlamaCpp,
+    Lvllm,
+    #[serde(rename = "fastllm")]
+    Fastllm,
     KTransformers,
     Custom,
 }

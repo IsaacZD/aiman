@@ -15,3 +15,9 @@ or copy into the default `configs/` paths:
 cp -n configs-example/agent/engines.toml configs/engines.toml
 cp -n configs-example/dashboard/hosts.toml configs/hosts.toml
 ```
+
+Optional agent tuning env vars:
+- `AIMAN_TOKIO_WORKERS` (cap agent runtime threads only)
+- `AIMAN_HARDWARE_TTL_SECS`
+- `AIMAN_HARDWARE_GPU_TIMEOUT_SECS`
+- `AIMAN_HARDWARE_SKIP_GPU`

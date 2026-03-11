@@ -489,7 +489,8 @@ fn parse_arg_value(args: &[String], key: &str) -> Option<String> {
 
 fn default_port(engine_type: &EngineType) -> u16 {
     match engine_type {
-        EngineType::LlamaCpp => 8080,
+        EngineType::LlamaCpp | EngineType::IkLlamaCpp => 8080,
+        EngineType::Fastllm => 8080,
         _ => 8000,
     }
 }

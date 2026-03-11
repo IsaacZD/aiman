@@ -26,6 +26,10 @@ export AIMAN_BIND="0.0.0.0:4010"
 export AIMAN_DATA_DIR="/path/to/data"
 export AIMAN_CONFIG_STORE="/path/to/configs.json"
 export AIMAN_ENGINES_CONFIG="/path/to/engines.toml"
+export AIMAN_TOKIO_WORKERS="2"
+export AIMAN_HARDWARE_TTL_SECS="10"
+export AIMAN_HARDWARE_GPU_TIMEOUT_SECS="2"
+export AIMAN_HARDWARE_SKIP_GPU="0"
 
 cargo run -p aiman_agent
 ```
@@ -58,6 +62,8 @@ The dev shell in `flake.nix` points `AIMAN_ENGINES_CONFIG` at `./config/agent/en
 - Logs, status snapshots, and the config store live under `AIMAN_DATA_DIR` (default `data`).
 - Dashboard hosts are stored in `AIMAN_HOSTS_STORE` (default `data/hosts.json`).
 - Dashboard benchmark history is stored in `AIMAN_DASHBOARD_BENCHMARKS` (default `data/benchmarks-dashboard.jsonl`).
+- Agent hardware refresh tuning: `AIMAN_HARDWARE_TTL_SECS`, `AIMAN_HARDWARE_GPU_TIMEOUT_SECS`, `AIMAN_HARDWARE_SKIP_GPU`.
+- Agent CPU cap (agent runtime only): `AIMAN_TOKIO_WORKERS`.
 
 ## Nix
 ### Dev shell workflow
@@ -99,5 +105,5 @@ Enable the services and overlay in your system config:
 ```
 
 Key options:
-- Agent: `services.aiman_agent.dataDir`, `configStore`, `seedConfig`, `bind`, `apiKey`.
+- Agent: `services.aiman_agent.dataDir`, `configStore`, `seedConfig`, `bind`, `apiKey`, `tokioWorkers`, `hardwareTtlSecs`, `hardwareGpuTimeoutSecs`, `hardwareSkipGpu`.
 - Dashboard: `services.aiman-dashboard.hostsStore`, `hostsConfig`, `bind`, `port`.

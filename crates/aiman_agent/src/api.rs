@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use aiman_shared::{EngineConfig, EngineInstance, EngineStatus, LogEntry};
 
 use crate::benchmark::{run_benchmark, BenchmarkRecord, BenchmarkRequest};
-use crate::hardware::{collect_hardware_info, HardwareInfo};
+use crate::hardware::HardwareInfo;
 use crate::models::scan_model_libraries;
 use crate::state::AppState;
 use crate::supervisor::{map_supervisor_error, read_jsonl};
@@ -19,8 +19,8 @@ pub async fn health() -> &'static str {
     "ok"
 }
 
-pub async fn hardware_info() -> Json<HardwareResponse> {
-    let hardware = collect_hardware_info().await;
+pub async fn hardware_info(State(state): State<AppState>) -> Json<HardwareResponse> {
+    let hardware = state.hardware_cache.lock().await.get().await;
     Json(HardwareResponse { hardware })
 }
 
@@ -207,7 +207,7 @@ pub async fn benchmark_engine(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let hardware = collect_hardware_info().await;
+    let hardware = state.hardware_cache.lock().await.get().await;
     let record = run_benchmark(config, instance, request.host, Some(hardware), request.settings)
         .await
         .map_err(|err| {

@@ -46,6 +46,10 @@
           AIMAN_DATA_DIR = "./config/agent/data";
           # AIMAN_CONFIG_STORE = "./config/agent/data/configs.json";
           AIMAN_ENGINES_CONFIG = "./config/agent/engines.toml";
+          # AIMAN_TOKIO_WORKERS = "2";
+          # AIMAN_HARDWARE_TTL_SECS = "10";
+          # AIMAN_HARDWARE_GPU_TIMEOUT_SECS = "2";
+          # AIMAN_HARDWARE_SKIP_GPU = "0";
           # AIMAN_API_KEY = "";
 
           # dashboard

@@ -5,6 +5,12 @@ let
   envList = lib.mapAttrsToList (name: value: "${name}=${toString value}") cfg.environment;
   apiKeyEnv = lib.optional (cfg.apiKey != null) "AIMAN_API_KEY=${cfg.apiKey}";
   seedEnv = lib.optional (cfg.seedConfig != null) "AIMAN_ENGINES_CONFIG=${cfg.seedConfig}";
+  tokioEnv = lib.optional (cfg.tokioWorkers != null) "AIMAN_TOKIO_WORKERS=${toString cfg.tokioWorkers}";
+  hardwareTtlEnv = lib.optional (cfg.hardwareTtlSecs != null) "AIMAN_HARDWARE_TTL_SECS=${toString cfg.hardwareTtlSecs}";
+  hardwareGpuTimeoutEnv = lib.optional (cfg.hardwareGpuTimeoutSecs != null)
+    "AIMAN_HARDWARE_GPU_TIMEOUT_SECS=${toString cfg.hardwareGpuTimeoutSecs}";
+  hardwareSkipGpuEnv = lib.optional (cfg.hardwareSkipGpu != null)
+    "AIMAN_HARDWARE_SKIP_GPU=${if cfg.hardwareSkipGpu then "1" else "0"}";
   configStore = cfg.configStore;
   bindAddr = cfg.bind;
   dataDir = cfg.dataDir;
@@ -13,7 +19,7 @@ let
     "AIMAN_DATA_DIR=${dataDir}"
     "AIMAN_CONFIG_STORE=${configStore}"
   ];
-  fullEnv = baseEnv ++ apiKeyEnv ++ seedEnv ++ envList;
+  fullEnv = baseEnv ++ apiKeyEnv ++ seedEnv ++ tokioEnv ++ hardwareTtlEnv ++ hardwareGpuTimeoutEnv ++ hardwareSkipGpuEnv ++ envList;
 
   portStr = lib.last (lib.splitString ":" bindAddr);
   hostPort = lib.tryEval (lib.toInt portStr);
@@ -39,13 +45,13 @@ in
     user = lib.mkOption {
       type = lib.types.str;
       default = "aiman";
-      description = "User account to run the host service.";
+      description = "User account to run the agent service.";
     };
 
     group = lib.mkOption {
       type = lib.types.str;
       default = "aiman";
-      description = "Group for the host service.";
+      description = "Group for the agent service.";
     };
 
     dataDir = lib.mkOption {
@@ -76,6 +82,30 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = "Bearer token for agent authentication.";
+    };
+
+    tokioWorkers = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = null;
+      description = "Limit the agent runtime worker threads (agent only; does not affect engines).";
+    };
+
+    hardwareTtlSecs = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = null;
+      description = "Cache duration in seconds for hardware info refresh.";
+    };
+
+    hardwareGpuTimeoutSecs = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = null;
+      description = "Timeout in seconds for GPU probe commands.";
+    };
+
+    hardwareSkipGpu = lib.mkOption {
+      type = lib.types.nullOr lib.types.bool;
+      default = null;
+      description = "Skip GPU probing in hardware info.";
     };
 
     environment = lib.mkOption {

@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
-use std::process::Command;
+use std::time::{Duration, Instant};
 use sysinfo::System;
-use tokio::task;
+use tokio::io::AsyncReadExt;
+use tokio::process::Command;
+use tokio::time::timeout;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HardwareInfo {
@@ -29,10 +31,70 @@ pub struct GpuInfo {
     pub driver_version: Option<String>,
 }
 
-pub async fn collect_hardware_info() -> HardwareInfo {
-    let mut system = System::new_all();
-    system.refresh_all();
-    let gpus = task::spawn_blocking(collect_gpus).await.unwrap_or_default();
+#[derive(Debug)]
+pub struct HardwareCache {
+    ttl: Duration,
+    last_fetched: Option<Instant>,
+    last_value: Option<HardwareInfo>,
+    gpu_timeout: Duration,
+    skip_gpu: bool,
+}
+
+impl HardwareCache {
+    pub fn new(ttl: Duration, gpu_timeout: Duration, skip_gpu: bool) -> Self {
+        Self {
+            ttl,
+            last_fetched: None,
+            last_value: None,
+            gpu_timeout,
+            skip_gpu,
+        }
+    }
+
+    pub fn from_env() -> Self {
+        let ttl_secs = std::env::var("AIMAN_HARDWARE_TTL_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(10);
+        let gpu_timeout_secs = std::env::var("AIMAN_HARDWARE_GPU_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(2);
+        let skip_gpu = std::env::var("AIMAN_HARDWARE_SKIP_GPU")
+            .ok()
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false);
+        Self::new(
+            Duration::from_secs(ttl_secs),
+            Duration::from_secs(gpu_timeout_secs),
+            skip_gpu,
+        )
+    }
+
+    pub async fn get(&mut self) -> HardwareInfo {
+        if self.ttl.as_secs() > 0 {
+            if let (Some(last), Some(value)) = (self.last_fetched, self.last_value.clone()) {
+                if last.elapsed() < self.ttl {
+                    return value;
+                }
+            }
+        }
+
+        let value = collect_hardware_info(self.gpu_timeout, self.skip_gpu).await;
+        self.last_fetched = Some(Instant::now());
+        self.last_value = Some(value.clone());
+        value
+    }
+}
+
+pub async fn collect_hardware_info(
+    gpu_timeout: Duration,
+    skip_gpu: bool,
+) -> HardwareInfo {
+    let mut system = System::new();
+    system.refresh_cpu();
+    system.refresh_memory();
+    let gpus = collect_gpus(gpu_timeout, skip_gpu).await;
 
     let cpu = system.cpus().first();
     let cpu_brand = cpu
@@ -61,32 +123,34 @@ pub async fn collect_hardware_info() -> HardwareInfo {
     }
 }
 
-fn collect_gpus() -> Vec<GpuInfo> {
-    if let Some(gpus) = collect_nvidia_gpus() {
+async fn collect_gpus(gpu_timeout: Duration, skip_gpu: bool) -> Vec<GpuInfo> {
+    if skip_gpu {
+        return Vec::new();
+    }
+
+    if let Some(gpus) = collect_nvidia_gpus(gpu_timeout).await {
         return gpus;
     }
 
-    if let Some(gpus) = collect_lspci_gpus() {
+    if let Some(gpus) = collect_lspci_gpus(gpu_timeout).await {
         return gpus;
     }
 
     Vec::new()
 }
 
-fn collect_nvidia_gpus() -> Option<Vec<GpuInfo>> {
-    let output = Command::new("nvidia-smi")
-        .args([
+async fn collect_nvidia_gpus(gpu_timeout: Duration) -> Option<Vec<GpuInfo>> {
+    let output = run_command_with_timeout(
+        "nvidia-smi",
+        &[
             "--query-gpu=name,memory.total,driver_version",
             "--format=csv,noheader,nounits",
-        ])
-        .output()
-        .ok()?;
+        ],
+        gpu_timeout,
+    )
+    .await?;
 
-    if !output.status.success() {
-        return None;
-    }
-
-    let text = String::from_utf8_lossy(&output.stdout);
+    let text = String::from_utf8_lossy(&output);
     let mut gpus = Vec::new();
     for line in text.lines().map(|line| line.trim()).filter(|line| !line.is_empty()) {
         let mut parts = line.split(',').map(|part| part.trim());
@@ -106,13 +170,9 @@ fn collect_nvidia_gpus() -> Option<Vec<GpuInfo>> {
     Some(gpus)
 }
 
-fn collect_lspci_gpus() -> Option<Vec<GpuInfo>> {
-    let output = Command::new("lspci").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let text = String::from_utf8_lossy(&output.stdout);
+async fn collect_lspci_gpus(gpu_timeout: Duration) -> Option<Vec<GpuInfo>> {
+    let output = run_command_with_timeout("lspci", &[], gpu_timeout).await?;
+    let text = String::from_utf8_lossy(&output);
     let mut gpus = Vec::new();
     for line in text.lines() {
         if !(line.contains("VGA compatible controller")
@@ -141,4 +201,45 @@ fn collect_lspci_gpus() -> Option<Vec<GpuInfo>> {
     }
 
     Some(gpus)
+}
+
+async fn run_command_with_timeout(
+    command: &str,
+    args: &[&str],
+    timeout_duration: Duration,
+) -> Option<Vec<u8>> {
+    let mut child = Command::new(command)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let stdout_handle = child.stdout.take().map(|mut stdout| {
+        tokio::spawn(async move {
+            let mut buffer = Vec::new();
+            let _ = stdout.read_to_end(&mut buffer).await;
+            buffer
+        })
+    });
+
+    let status = match timeout(timeout_duration, child.wait()).await {
+        Ok(Ok(status)) => status,
+        _ => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return None;
+        }
+    };
+
+    if !status.success() {
+        return None;
+    }
+
+    let stdout = match stdout_handle {
+        Some(handle) => handle.await.ok().unwrap_or_default(),
+        None => Vec::new(),
+    };
+
+    Some(stdout)
 }

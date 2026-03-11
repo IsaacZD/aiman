@@ -22,7 +22,7 @@ type HostsFile = {
 type EngineConfig = {
   id: string;
   name: string;
-  engine_type: "Vllm" | "LlamaCpp" | "KTransformers" | "Custom";
+  engine_type: "Vllm" | "LlamaCpp" | "ik_llamacpp" | "Lvllm" | "fastllm" | "KTransformers" | "Custom";
   command: string;
   args: string[];
   env: { key: string; value: string }[];
@@ -992,7 +992,10 @@ function parseArgValue(args: string[], key: string) {
 }
 
 function defaultPort(engineType: EngineConfig["engine_type"]) {
-  if (engineType === "LlamaCpp") {
+  if (engineType === "LlamaCpp" || engineType === "ik_llamacpp") {
+    return 8080;
+  }
+  if (engineType === "fastllm") {
     return 8080;
   }
   return 8000;
