@@ -12,18 +12,14 @@ let
   hardwareSkipGpuEnv = lib.optional (cfg.hardwareSkipGpu != null)
     "AIMAN_HARDWARE_SKIP_GPU=${if cfg.hardwareSkipGpu then "1" else "0"}";
   configStore = cfg.configStore;
-  bindAddr = cfg.bind;
   dataDir = cfg.dataDir;
   baseEnv = [
-    "AIMAN_BIND=${bindAddr}"
+    "AIMAN_BIND=${cfg.host}:${cfg.port}"
     "AIMAN_DATA_DIR=${dataDir}"
     "AIMAN_CONFIG_STORE=${configStore}"
   ];
   fullEnv = baseEnv ++ apiKeyEnv ++ seedEnv ++ tokioEnv ++ hardwareTtlEnv ++ hardwareGpuTimeoutEnv ++ hardwareSkipGpuEnv ++ envList;
 
-  portStr = lib.last (lib.splitString ":" bindAddr);
-  hostPort = lib.tryEval (lib.toInt portStr);
-  openFirewall = cfg.openFirewall && hostPort.success;
   isDefaultDataDir = cfg.dataDir == "/var/lib/aiman/agent";
   isDefaultStore = cfg.configStore == "/var/lib/aiman/agent/configs.json";
   tmpRules =
@@ -72,10 +68,16 @@ in
       description = "Optional engines.toml seed file path.";
     };
 
-    bind = lib.mkOption {
+    host = lib.mkOption {
       type = lib.types.str;
-      default = "0.0.0.0:4010";
-      description = "Bind address for the agent API.";
+      default = "127.0.0.1";
+      description = "Host ipv4 address for the agent API.";
+    };
+    
+    port = lib.mkOption {
+      type = lib.types.int;
+      default = 4010;
+      description = "Port for the agent API.";
     };
 
     apiKey = lib.mkOption {
@@ -150,6 +152,6 @@ in
 
     systemd.tmpfiles.rules = tmpRules;
 
-    networking.firewall.allowedTCPPorts = lib.mkIf openFirewall [ hostPort.value ];
+    networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ hostPort.value ];
   };
 }
