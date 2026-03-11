@@ -29,6 +29,7 @@ pub enum EngineType {
     Vllm,
     LlamaCpp,
     KTransformers,
+    Custom,
 }
 
 /// Runtime status of an engine instance.

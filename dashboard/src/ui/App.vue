@@ -276,16 +276,28 @@
               <option value="Vllm">Vllm</option>
               <option value="LlamaCpp">LlamaCpp</option>
               <option value="KTransformers">KTransformers</option>
+              <option value="Custom">Custom</option>
             </select>
           </label>
           <label>
             Command
             <input v-model="configForm.command" type="text" placeholder="/opt/vllm/serve" />
           </label>
-          <label>
-            Args (one per line)
-            <textarea v-model="configForm.argsText" rows="4" placeholder="--model&#10;deepseek-ai/DeepSeek-R1"></textarea>
-          </label>
+          <div class="engine-fields-panel">
+            <VllmConfigFields
+              v-if="configForm.engine_type === 'Vllm'"
+              v-model="vllmArgsForm"
+            />
+            <LlamaCppConfigFields
+              v-else-if="configForm.engine_type === 'LlamaCpp'"
+              v-model="llamaCppArgsForm"
+            />
+            <KTransformersConfigFields
+              v-else-if="configForm.engine_type === 'KTransformers'"
+              v-model="kTransformersArgsForm"
+            />
+            <CustomConfigFields v-else v-model="customArgsForm" />
+          </div>
           <label>
             Env (KEY=VALUE per line)
             <textarea v-model="configForm.envText" rows="4" placeholder="HF_HOME=/data/hf"></textarea>
@@ -328,7 +340,31 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref } from "vue";
+import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
+import VllmConfigFields from "./components/VllmConfigFields.vue";
+import LlamaCppConfigFields from "./components/LlamaCppConfigFields.vue";
+import KTransformersConfigFields from "./components/KTransformersConfigFields.vue";
+import CustomConfigFields from "./components/CustomConfigFields.vue";
+import {
+  buildVllmArgs,
+  createVllmArgsForm,
+  parseVllmArgs
+} from "./engine-args/vllm";
+import {
+  buildLlamaCppArgs,
+  createLlamaCppArgsForm,
+  parseLlamaCppArgs
+} from "./engine-args/llamaCpp";
+import {
+  buildKTransformersArgs,
+  createKTransformersArgsForm,
+  parseKTransformersArgs
+} from "./engine-args/kTransformers";
+import {
+  buildCustomArgs,
+  createCustomArgsForm,
+  parseCustomArgs
+} from "./engine-args/custom";
 
 type Host = {
   id: string;
@@ -345,7 +381,7 @@ type EnvVar = {
 type EngineConfig = {
   id: string;
   name: string;
-  engine_type: "Vllm" | "LlamaCpp" | "KTransformers";
+  engine_type: "Vllm" | "LlamaCpp" | "KTransformers" | "Custom";
   command: string;
   args: string[];
   env: EnvVar[];
@@ -400,6 +436,10 @@ const configs = ref<EngineConfig[]>([]);
 const configErrors = ref<string[]>([]);
 const configMode = ref<"create" | "edit">("create");
 const configForm = ref(createEmptyConfigForm());
+const vllmArgsForm = ref(createVllmArgsForm());
+const llamaCppArgsForm = ref(createLlamaCppArgsForm());
+const kTransformersArgsForm = ref(createKTransformersArgsForm());
+const customArgsForm = ref(createCustomArgsForm());
 const showConfigModal = ref(false);
 const hostErrors = ref<string[]>([]);
 const hostMode = ref<"create" | "edit">("create");
@@ -408,6 +448,27 @@ const showHostModal = ref(false);
 
 const selectedHost = computed(() =>
   hosts.value.find((host) => host.id === configHostId.value) ?? null
+);
+
+const defaultCommands: Record<EngineConfig["engine_type"], string> = {
+  Vllm: "python",
+  LlamaCpp: "llama-server",
+  KTransformers: "ktransformers-server",
+  Custom: ""
+};
+
+const lastEngineType = ref<EngineConfig["engine_type"]>(configForm.value.engine_type);
+watch(
+  () => configForm.value.engine_type,
+  (next) => {
+    const previous = lastEngineType.value;
+    const previousDefault = defaultCommands[previous];
+    const nextDefault = defaultCommands[next];
+    if (!configForm.value.command.trim() || configForm.value.command === previousDefault) {
+      configForm.value.command = nextDefault;
+    }
+    lastEngineType.value = next;
+  }
 );
 
 let ws: WebSocket | null = null;
@@ -558,7 +619,6 @@ function createEmptyConfigForm() {
     name: "",
     engine_type: "Vllm" as EngineConfig["engine_type"],
     command: "",
-    argsText: "",
     envText: "",
     working_dir: "",
     auto_restart_enabled: false,
@@ -704,6 +764,10 @@ async function deleteHostFromModal() {
 function resetConfigForm() {
   configMode.value = "create";
   configForm.value = createEmptyConfigForm();
+  vllmArgsForm.value = createVllmArgsForm();
+  llamaCppArgsForm.value = createLlamaCppArgsForm();
+  kTransformersArgsForm.value = createKTransformersArgsForm();
+  customArgsForm.value = createCustomArgsForm();
 }
 
 function openConfigModal(config?: EngineConfig) {
@@ -715,6 +779,9 @@ function openConfigModal(config?: EngineConfig) {
     editConfig(config);
   } else {
     resetConfigForm();
+  }
+  if (!configForm.value.command.trim()) {
+    configForm.value.command = defaultCommands[configForm.value.engine_type];
   }
   showConfigModal.value = true;
 }
@@ -731,13 +798,21 @@ function editConfig(config: EngineConfig) {
     name: config.name,
     engine_type: config.engine_type,
     command: config.command,
-    argsText: config.args.join("\n"),
     envText: config.env.map((item) => `${item.key}=${item.value}`).join("\n"),
     working_dir: config.working_dir ?? "",
     auto_restart_enabled: config.auto_restart.enabled,
     auto_restart_max_retries: config.auto_restart.max_retries,
     auto_restart_backoff_secs: config.auto_restart.backoff_secs
   };
+  if (config.engine_type === "Vllm") {
+    vllmArgsForm.value = parseVllmArgs(config.args ?? []);
+  } else if (config.engine_type === "LlamaCpp") {
+    llamaCppArgsForm.value = parseLlamaCppArgs(config.args ?? []);
+  } else if (config.engine_type === "KTransformers") {
+    kTransformersArgsForm.value = parseKTransformersArgs(config.args ?? []);
+  } else {
+    customArgsForm.value = parseCustomArgs(config.args ?? []);
+  }
 }
 
 async function saveConfig() {
@@ -764,12 +839,23 @@ async function saveConfig() {
     return;
   }
 
+  let args: string[] = [];
+  if (configForm.value.engine_type === "Vllm") {
+    args = buildVllmArgs(vllmArgsForm.value);
+  } else if (configForm.value.engine_type === "LlamaCpp") {
+    args = buildLlamaCppArgs(llamaCppArgsForm.value);
+  } else if (configForm.value.engine_type === "KTransformers") {
+    args = buildKTransformersArgs(kTransformersArgsForm.value);
+  } else {
+    args = buildCustomArgs(customArgsForm.value);
+  }
+
   const config: EngineConfig = {
     id: configForm.value.id.trim(),
     name: configForm.value.name.trim(),
     engine_type: configForm.value.engine_type,
     command: configForm.value.command.trim(),
-    args: parseArgsLines(configForm.value.argsText),
+    args,
     env: envEntries,
     working_dir: configForm.value.working_dir.trim()
       ? configForm.value.working_dir.trim()
@@ -845,13 +931,6 @@ function selectHost(host: Host) {
   }
   configHostId.value = host.id;
   loadConfigs();
-}
-
-function parseArgsLines(raw: string) {
-  return raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
 }
 
 function parseEnvLines(raw: string, errors: string[]) {
