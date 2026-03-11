@@ -11,7 +11,7 @@ type HostConfig = {
   id: string;
   name: string;
   base_url: string;
-  api_key: string;
+  api_key?: string;
 };
 
 type HostsFile = {
@@ -101,7 +101,7 @@ server.get("/api/engines", async () => {
     hosts.map(async (host) => {
       try {
         const res = await fetch(`${host.base_url}/v1/engines`, {
-          headers: { Authorization: `Bearer ${host.api_key}` }
+          headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
         });
         if (!res.ok) {
           return { host, error: `HTTP ${res.status}` };
@@ -126,7 +126,7 @@ server.get("/api/hosts/:hostId/configs", async (request, reply) => {
   }
 
   const res = await fetch(`${host.base_url}/v1/configs`, {
-    headers: { Authorization: `Bearer ${host.api_key}` }
+    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
   });
   const body = await safeJson(res);
   return reply.code(res.status).send(body ?? { ok: res.ok });
@@ -143,7 +143,7 @@ server.post("/api/hosts/:hostId/configs", async (request, reply) => {
   const res = await fetch(`${host.base_url}/v1/configs`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${host.api_key}`,
+      ...(host.api_key ? { Authorization: `Bearer ${host.api_key}` } : {}),
       "Content-Type": "application/json"
     },
     body: JSON.stringify(request.body ?? {})
@@ -163,7 +163,7 @@ server.put("/api/hosts/:hostId/configs/:configId", async (request, reply) => {
   const res = await fetch(`${host.base_url}/v1/configs/${configId}`, {
     method: "PUT",
     headers: {
-      Authorization: `Bearer ${host.api_key}`,
+      ...(host.api_key ? { Authorization: `Bearer ${host.api_key}` } : {}),
       "Content-Type": "application/json"
     },
     body: JSON.stringify(request.body ?? {})
@@ -182,7 +182,7 @@ server.delete("/api/hosts/:hostId/configs/:configId", async (request, reply) => 
 
   const res = await fetch(`${host.base_url}/v1/configs/${configId}`, {
     method: "DELETE",
-    headers: { Authorization: `Bearer ${host.api_key}` }
+    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
   });
   const body = await safeJson(res);
   return reply.code(res.status).send(body ?? { ok: res.ok });
@@ -198,7 +198,7 @@ server.post("/api/hosts/:hostId/engines/:engineId/start", async (request, reply)
 
   const res = await fetch(`${host.base_url}/v1/engines/${engineId}/start`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${host.api_key}` }
+    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
   });
   const body = await safeJson(res);
   return reply.code(res.status).send(body ?? { ok: res.ok });
@@ -214,7 +214,7 @@ server.post("/api/hosts/:hostId/engines/:engineId/stop", async (request, reply) 
 
   const res = await fetch(`${host.base_url}/v1/engines/${engineId}/stop`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${host.api_key}` }
+    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
   });
   const body = await safeJson(res);
   return reply.code(res.status).send(body ?? { ok: res.ok });
@@ -234,7 +234,7 @@ server.get(
 
     const targetUrl = `${host.base_url.replace(/\/$/, "")}/v1/engines/${engineId}/logs/ws`;
     const upstream = new WebSocket(targetUrl, {
-      headers: { Authorization: `Bearer ${host.api_key}` }
+      headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
     });
 
     upstream.on("message", (data) => {
@@ -324,9 +324,6 @@ function validateHost(payload: Partial<HostConfig>) {
   }
   if (!payload.base_url?.trim()) {
     return { ok: false, error: "base_url is required" };
-  }
-  if (!payload.api_key?.trim()) {
-    return { ok: false, error: "api_key is required" };
   }
   return { ok: true };
 }

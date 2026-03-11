@@ -16,15 +16,30 @@
       </div>
     </header>
 
-    <section class="panel">
+    <nav class="primary-tabs">
+      <button class="tab" :class="{ active: mainTab === 'engines' }" @click="mainTab = 'engines'">
+        Engines
+      </button>
+      <button
+        class="tab"
+        :class="{ active: mainTab === 'detail' }"
+        :disabled="!selected"
+        @click="mainTab = 'detail'"
+      >
+        Engine detail
+      </button>
+      <button class="tab" :class="{ active: mainTab === 'admin' }" @click="mainTab = 'admin'">
+        Admin
+      </button>
+    </nav>
+
+    <section v-if="mainTab === 'engines'" class="panel">
       <div class="panel-head">
         <div>
           <h2>Engines</h2>
           <p class="panel-sub">{{ engines.length }} configured engine(s)</p>
         </div>
         <div class="panel-actions">
-          <button class="secondary" @click="scrollToHosts">Manage hosts</button>
-          <button class="secondary" @click="scrollToConfigs">Manage configs</button>
           <button class="primary" @click="refreshAll" :disabled="loading">
             {{ loading ? "Refreshing..." : "Refresh" }}
           </button>
@@ -60,156 +75,76 @@
       </div>
     </section>
 
-    <section class="panel" id="hosts">
+    <section v-if="mainTab === 'admin'" class="panel admin-panel">
       <div class="panel-head">
         <div>
-          <h2>Hosts</h2>
-          <p class="panel-sub">Add or update LLM servers the dashboard should control.</p>
-        </div>
-        <div class="panel-actions">
-          <button class="secondary" @click="resetHostForm">New host</button>
+          <h2>Admin management</h2>
+          <p class="panel-sub">Manage hosts and engine configs in one place.</p>
         </div>
       </div>
 
-      <div v-if="hostErrors.length" class="alert">
-        <p v-for="error in hostErrors" :key="error">{{ error }}</p>
-      </div>
-
-      <div class="host-grid">
-        <div class="host-list">
-          <article v-for="host in hosts" :key="host.id" class="host-card">
-            <div>
-              <h3>{{ host.name }}</h3>
-              <p class="host-meta">{{ host.id }} • {{ host.base_url }}</p>
+      <div class="admin-grid">
+        <div class="admin-pane">
+          <div class="pane-head">
+            <div class="pane-title">
+              <h3>Hosts</h3>
+              <button class="secondary" @click="openHostModal">New host</button>
             </div>
-            <div class="host-actions">
-              <button class="secondary" @click="editHost(host)">Edit</button>
-              <button class="ghost" @click="deleteHost(host)">Delete</button>
-            </div>
-          </article>
-          <p v-if="!hosts.length" class="empty">No hosts yet.</p>
-        </div>
-
-        <form class="host-form" @submit.prevent="saveHost">
-          <h3>{{ hostMode === "create" ? "Create host" : "Edit host" }}</h3>
-          <label>
-            Host ID
-            <input v-model="hostForm.id" type="text" placeholder="llm-01" />
-          </label>
-          <label>
-            Name
-            <input v-model="hostForm.name" type="text" placeholder="LLM Server 01" />
-          </label>
-          <label>
-            Base URL
-            <input v-model="hostForm.base_url" type="text" placeholder="http://10.0.0.12:4010" />
-          </label>
-          <label>
-            API key
-            <input v-model="hostForm.api_key" type="password" placeholder="dev-secret" />
-          </label>
-          <div class="config-submit">
-            <button class="primary" type="submit">
-              {{ hostMode === "create" ? "Create" : "Save changes" }}
-            </button>
+            <p class="panel-sub">Pick a host to manage configs.</p>
           </div>
-        </form>
+          <div v-if="hostErrors.length" class="alert">
+            <p v-for="error in hostErrors" :key="error">{{ error }}</p>
+          </div>
+          <div class="host-list">
+            <article
+              v-for="host in hosts"
+              :key="host.id"
+              class="host-card clickable"
+              :class="{ active: host.id === configHostId }"
+              @click="selectHost(host)"
+            >
+              <div>
+                <h3>{{ host.name }}</h3>
+                <p class="host-meta">{{ host.id }} • {{ host.base_url }}</p>
+              </div>
+              <div class="host-actions">
+                <button class="secondary" @click.stop="openHostModal(host)">Edit</button>
+              </div>
+            </article>
+            <p v-if="!hosts.length" class="empty">No hosts yet.</p>
+          </div>
+        </div>
+
+        <div v-if="selectedHost" class="admin-pane">
+          <div class="pane-head">
+            <div class="pane-title">
+              <h3>Configs</h3>
+              <button class="secondary" @click="openConfigModal()">New config</button>
+            </div>
+            <p class="panel-sub">
+              {{ selectedHost ? `${selectedHost.name} • ${selectedHost.id}` : "Select a host." }}
+            </p>
+          </div>
+          <div v-if="configErrors.length" class="alert">
+            <p v-for="error in configErrors" :key="error">{{ error }}</p>
+          </div>
+          <div class="config-list">
+            <article v-for="config in configs" :key="config.id" class="config-card">
+              <div>
+                <h3>{{ config.name }}</h3>
+                <p class="config-meta">{{ config.id }} • {{ config.engine_type }}</p>
+              </div>
+              <div class="config-actions">
+                <button class="secondary" @click="openConfigModal(config)">Edit</button>
+              </div>
+            </article>
+            <p v-if="!configs.length" class="empty">No configs yet.</p>
+          </div>
+        </div>
       </div>
     </section>
 
-    <section class="panel" id="configs">
-      <div class="panel-head">
-        <div>
-          <h2>Engine configs</h2>
-          <p class="panel-sub">Create, edit, and remove configs per host.</p>
-        </div>
-        <div class="config-toolbar">
-          <select v-model="configHostId" @change="loadConfigs">
-            <option v-for="host in hosts" :key="host.id" :value="host.id">
-              {{ host.name }}
-            </option>
-          </select>
-          <button class="secondary" @click="resetConfigForm">New config</button>
-        </div>
-      </div>
-
-      <div v-if="configErrors.length" class="alert">
-        <p v-for="error in configErrors" :key="error">{{ error }}</p>
-      </div>
-
-      <div class="config-grid">
-        <div class="config-list">
-          <article v-for="config in configs" :key="config.id" class="config-card">
-            <div>
-              <h3>{{ config.name }}</h3>
-              <p class="config-meta">{{ config.id }} • {{ config.engine_type }}</p>
-            </div>
-            <div class="config-actions">
-              <button class="secondary" @click="editConfig(config)">Edit</button>
-              <button class="ghost" @click="deleteConfig(config)">Delete</button>
-            </div>
-          </article>
-          <p v-if="!configs.length" class="empty">No configs yet.</p>
-        </div>
-
-        <form class="config-form" @submit.prevent="saveConfig">
-          <h3>{{ configMode === "create" ? "Create config" : "Edit config" }}</h3>
-          <label>
-            Config ID
-            <input v-model="configForm.id" type="text" placeholder="deepseek-vllm" />
-          </label>
-          <label>
-            Display name
-            <input v-model="configForm.name" type="text" placeholder="DeepSeek via vLLM" />
-          </label>
-          <label>
-            Engine type
-            <select v-model="configForm.engine_type">
-              <option value="Vllm">Vllm</option>
-              <option value="LlamaCpp">LlamaCpp</option>
-              <option value="KTransformers">KTransformers</option>
-            </select>
-          </label>
-          <label>
-            Command
-            <input v-model="configForm.command" type="text" placeholder="/opt/vllm/serve" />
-          </label>
-          <label>
-            Args (one per line)
-            <textarea v-model="configForm.argsText" rows="4" placeholder="--model&#10;deepseek-ai/DeepSeek-R1"></textarea>
-          </label>
-          <label>
-            Env (KEY=VALUE per line)
-            <textarea v-model="configForm.envText" rows="4" placeholder="HF_HOME=/data/hf"></textarea>
-          </label>
-          <label>
-            Working dir
-            <input v-model="configForm.working_dir" type="text" placeholder="/opt/engines" />
-          </label>
-          <div class="config-inline">
-            <label>
-              <input v-model="configForm.auto_restart_enabled" type="checkbox" />
-              Auto restart
-            </label>
-            <label>
-              Max retries
-              <input v-model.number="configForm.auto_restart_max_retries" type="number" min="0" />
-            </label>
-            <label>
-              Backoff (sec)
-              <input v-model.number="configForm.auto_restart_backoff_secs" type="number" min="1" />
-            </label>
-          </div>
-          <div class="config-submit">
-            <button class="primary" type="submit">
-              {{ configMode === "create" ? "Create" : "Save changes" }}
-            </button>
-          </div>
-        </form>
-      </div>
-    </section>
-
-    <section class="panel">
+    <section v-if="mainTab === 'detail'" class="panel">
       <div class="panel-head">
         <div>
           <h2>Engine detail</h2>
@@ -279,17 +214,127 @@
         </div>
       </div>
     </section>
+
+    <div v-if="showHostModal" class="modal-backdrop">
+      <div class="modal">
+        <div class="modal-head">
+          <h3>{{ hostMode === "create" ? "Create host" : "Edit host" }}</h3>
+          <button class="ghost" @click="closeHostModal">Close</button>
+        </div>
+        <form class="host-form" @submit.prevent="saveHost">
+          <label>
+            Host ID
+            <input v-model="hostForm.id" type="text" placeholder="llm-01" />
+          </label>
+          <label>
+            Name
+            <input v-model="hostForm.name" type="text" placeholder="LLM Server 01" />
+          </label>
+          <label>
+            Base URL
+            <input v-model="hostForm.base_url" type="text" placeholder="http://10.0.0.12:4010" />
+          </label>
+          <label>
+            API key (optional)
+            <input v-model="hostForm.api_key" type="password" placeholder="dev-secret" />
+          </label>
+          <div class="form-actions">
+            <button
+              v-if="hostMode === 'edit'"
+              class="ghost"
+              type="button"
+              @click="deleteHostFromModal"
+            >
+              Delete
+            </button>
+            <button class="primary" type="submit">
+              {{ hostMode === "create" ? "Create host" : "Save changes" }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div v-if="showConfigModal" class="modal-backdrop">
+      <div class="modal modal-wide">
+        <div class="modal-head">
+          <h3>{{ configMode === "create" ? "Create config" : "Edit config" }}</h3>
+          <button class="ghost" @click="closeConfigModal">Close</button>
+        </div>
+        <form class="config-form" @submit.prevent="saveConfig">
+          <label>
+            Config ID
+            <input v-model="configForm.id" type="text" placeholder="deepseek-vllm" />
+          </label>
+          <label>
+            Display name
+            <input v-model="configForm.name" type="text" placeholder="DeepSeek via vLLM" />
+          </label>
+          <label>
+            Engine type
+            <select v-model="configForm.engine_type">
+              <option value="Vllm">Vllm</option>
+              <option value="LlamaCpp">LlamaCpp</option>
+              <option value="KTransformers">KTransformers</option>
+            </select>
+          </label>
+          <label>
+            Command
+            <input v-model="configForm.command" type="text" placeholder="/opt/vllm/serve" />
+          </label>
+          <label>
+            Args (one per line)
+            <textarea v-model="configForm.argsText" rows="4" placeholder="--model&#10;deepseek-ai/DeepSeek-R1"></textarea>
+          </label>
+          <label>
+            Env (KEY=VALUE per line)
+            <textarea v-model="configForm.envText" rows="4" placeholder="HF_HOME=/data/hf"></textarea>
+          </label>
+          <label>
+            Working dir
+            <input v-model="configForm.working_dir" type="text" placeholder="/opt/engines" />
+          </label>
+          <div class="config-inline">
+            <label>
+              <input v-model="configForm.auto_restart_enabled" type="checkbox" />
+              Auto restart
+            </label>
+            <label>
+              Max retries
+              <input v-model.number="configForm.auto_restart_max_retries" type="number" min="0" />
+            </label>
+            <label>
+              Backoff (sec)
+              <input v-model.number="configForm.auto_restart_backoff_secs" type="number" min="1" />
+            </label>
+          </div>
+          <div class="form-actions">
+            <button
+              v-if="configMode === 'edit'"
+              class="ghost"
+              type="button"
+              @click="deleteConfigFromModal"
+            >
+              Delete
+            </button>
+            <button class="primary" type="submit">
+              {{ configMode === "create" ? "Create config" : "Save changes" }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   </main>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref } from "vue";
+import { computed, onMounted, onBeforeUnmount, ref } from "vue";
 
 type Host = {
   id: string;
   name: string;
   base_url: string;
-  api_key: string;
+  api_key?: string;
 };
 
 type EnvVar = {
@@ -345,6 +390,7 @@ const logs = ref<string[]>([]);
 const errors = ref<string[]>([]);
 const loading = ref(false);
 const lastRefreshed = ref<string | null>(null);
+const mainTab = ref<"engines" | "detail" | "admin">("engines");
 const detailTab = ref<"live" | "history">("live");
 const historyMinutes = ref(120);
 const statusHistory = ref<EngineInstance[]>([]);
@@ -354,9 +400,15 @@ const configs = ref<EngineConfig[]>([]);
 const configErrors = ref<string[]>([]);
 const configMode = ref<"create" | "edit">("create");
 const configForm = ref(createEmptyConfigForm());
+const showConfigModal = ref(false);
 const hostErrors = ref<string[]>([]);
 const hostMode = ref<"create" | "edit">("create");
 const hostForm = ref(createEmptyHostForm());
+const showHostModal = ref(false);
+
+const selectedHost = computed(() =>
+  hosts.value.find((host) => host.id === configHostId.value) ?? null
+);
 
 let ws: WebSocket | null = null;
 
@@ -491,14 +543,6 @@ function statusClass(status: string) {
   return `status-${status.toLowerCase()}`;
 }
 
-function scrollToConfigs() {
-  document.getElementById("configs")?.scrollIntoView({ behavior: "smooth" });
-}
-
-function scrollToHosts() {
-  document.getElementById("hosts")?.scrollIntoView({ behavior: "smooth" });
-}
-
 function createEmptyHostForm() {
   return {
     id: "",
@@ -549,13 +593,27 @@ function resetHostForm() {
   hostForm.value = createEmptyHostForm();
 }
 
+function openHostModal(host?: Host) {
+  if (host) {
+    editHost(host);
+  } else {
+    resetHostForm();
+  }
+  showHostModal.value = true;
+}
+
+function closeHostModal() {
+  showHostModal.value = false;
+  hostErrors.value = [];
+}
+
 function editHost(host: Host) {
   hostMode.value = "edit";
   hostForm.value = {
     id: host.id,
     name: host.name,
     base_url: host.base_url,
-    api_key: host.api_key
+    api_key: host.api_key ?? ""
   };
 }
 
@@ -573,16 +631,13 @@ async function saveHost() {
     hostErrors.value = ["Base URL is required."];
     return;
   }
-  if (!hostForm.value.api_key.trim()) {
-    hostErrors.value = ["API key is required."];
-    return;
-  }
 
+  const apiKey = hostForm.value.api_key.trim();
   const payload = {
     id: hostForm.value.id.trim(),
     name: hostForm.value.name.trim(),
     base_url: hostForm.value.base_url.trim(),
-    api_key: hostForm.value.api_key.trim()
+    ...(apiKey ? { api_key: apiKey } : {})
   };
 
   const method = hostMode.value === "create" ? "POST" : "PUT";
@@ -590,6 +645,10 @@ async function saveHost() {
     hostMode.value === "create"
       ? "/api/hosts"
       : `/api/hosts/${encodeURIComponent(payload.id)}`;
+
+  if (hostMode.value === "edit" && !confirm(`Save changes to host "${payload.name}"?`)) {
+    return;
+  }
 
   const res = await fetch(url, {
     method,
@@ -599,18 +658,31 @@ async function saveHost() {
 
   if (!res.ok) {
     const body = await res.json().catch(() => null);
+    if (
+      res.status === 409 &&
+      hostMode.value === "create" &&
+      payload.id &&
+      confirm(`Host "${payload.id}" already exists. Edit it instead?`)
+    ) {
+      const existing = hosts.value.find((host) => host.id === payload.id);
+      if (existing) {
+        openHostModal(existing);
+      }
+      return;
+    }
     hostErrors.value = [
       body?.error ? `Save failed: ${body.error}` : `Save failed (HTTP ${res.status}).`
     ];
     return;
   }
 
+  closeHostModal();
   resetHostForm();
   await refreshAll();
 }
 
 async function deleteHost(host: Host) {
-  if (!confirm(`Delete host ${host.name}?`)) {
+  if (!confirm(`Delete host "${host.name}"? This cannot be undone.`)) {
     return;
   }
   const res = await fetch(`/api/hosts/${encodeURIComponent(host.id)}`, { method: "DELETE" });
@@ -621,9 +693,35 @@ async function deleteHost(host: Host) {
   await refreshAll();
 }
 
+async function deleteHostFromModal() {
+  if (!hostForm.value.id.trim()) {
+    return;
+  }
+  await deleteHost({ id: hostForm.value.id, name: hostForm.value.name } as Host);
+  closeHostModal();
+}
+
 function resetConfigForm() {
   configMode.value = "create";
   configForm.value = createEmptyConfigForm();
+}
+
+function openConfigModal(config?: EngineConfig) {
+  if (!configHostId.value) {
+    configErrors.value = ["Select a host before creating a config."];
+    return;
+  }
+  if (config && typeof config === "object" && "id" in config) {
+    editConfig(config);
+  } else {
+    resetConfigForm();
+  }
+  showConfigModal.value = true;
+}
+
+function closeConfigModal() {
+  showConfigModal.value = false;
+  configErrors.value = [];
 }
 
 function editConfig(config: EngineConfig) {
@@ -683,6 +781,11 @@ async function saveConfig() {
     }
   };
 
+  const actionLabel = configMode.value === "create" ? "Create config" : "Save changes to config";
+  if (!confirm(`${actionLabel} "${config.name}"?`)) {
+    return;
+  }
+
   const method = configMode.value === "create" ? "POST" : "PUT";
   const url =
     configMode.value === "create"
@@ -703,6 +806,7 @@ async function saveConfig() {
     return;
   }
 
+  closeConfigModal();
   resetConfigForm();
   await loadConfigs();
   await refreshAll();
@@ -712,7 +816,7 @@ async function deleteConfig(config: EngineConfig) {
   if (!configHostId.value) {
     return;
   }
-  if (!confirm(`Delete config ${config.name}?`)) {
+  if (!confirm(`Delete config "${config.name}"? This cannot be undone.`)) {
     return;
   }
   const res = await fetch(
@@ -725,6 +829,22 @@ async function deleteConfig(config: EngineConfig) {
   }
   await loadConfigs();
   await refreshAll();
+}
+
+async function deleteConfigFromModal() {
+  if (!configForm.value.id.trim()) {
+    return;
+  }
+  await deleteConfig({ id: configForm.value.id, name: configForm.value.name } as EngineConfig);
+  closeConfigModal();
+}
+
+function selectHost(host: Host) {
+  if (configHostId.value === host.id) {
+    return;
+  }
+  configHostId.value = host.id;
+  loadConfigs();
 }
 
 function parseArgsLines(raw: string) {
