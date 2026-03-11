@@ -173,6 +173,7 @@
               <p class="benchmark-meta">Run {{ formatBenchmarkTime(record.ts) }}</p>
             </div>
             <div class="benchmark-tags">
+              <span class="pill">{{ formatBenchmarkOrigin(record.origin) }}</span>
               <span class="pill">Model {{ record.settings.model }}</span>
               <span class="pill">Max tokens {{ record.settings.max_tokens }}</span>
               <span class="pill">Prompt {{ record.settings.prompt_words }} words</span>
@@ -508,6 +509,13 @@
         </div>
         <form class="config-form" @submit.prevent="runBenchmark">
           <label>
+            Run location
+            <select v-model="benchmarkForm.mode">
+              <option value="host">Host machine</option>
+              <option value="dashboard">Dashboard machine</option>
+            </select>
+          </label>
+          <label>
             Parallelism (comma separated)
             <input v-model="benchmarkForm.concurrencyText" type="text" placeholder="1,2,4,8" />
           </label>
@@ -711,6 +719,7 @@ type BenchmarkResult = {
 type BenchmarkRecord = {
   id: string;
   ts: string;
+  origin?: "host" | "dashboard";
   host?: BenchmarkHostSnapshot | null;
   host_hardware?: HardwareInfo | null;
   engine_config: EngineConfig;
@@ -1138,6 +1147,10 @@ function formatBenchmarkTime(value: string) {
   return parsed.toLocaleString();
 }
 
+function formatBenchmarkOrigin(origin?: "host" | "dashboard") {
+  return origin === "dashboard" ? "Dashboard run" : "Host run";
+}
+
 function formatMs(value: number) {
   if (!value) {
     return "—";
@@ -1219,6 +1232,7 @@ function createEmptyConfigForm() {
 
 function createBenchmarkForm() {
   return {
+    mode: "host" as "host" | "dashboard",
     concurrencyText: "1,2,4,8",
     requestsPerConcurrency: 8,
     maxTokens: 256,
@@ -1701,7 +1715,7 @@ async function runBenchmark() {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings })
+        body: JSON.stringify({ settings, mode: benchmarkForm.value.mode })
       }
     );
     if (!res.ok) {
@@ -1732,6 +1746,7 @@ async function loadBenchmarks() {
     }
     const body = (await res.json()) as {
       results: { host: Host; records?: BenchmarkRecord[]; error?: string }[];
+      local?: BenchmarkRecord[];
     };
     const next: BenchmarkRecord[] = [];
     const errors: string[] = [];
@@ -1743,6 +1758,9 @@ async function loadBenchmarks() {
       for (const record of result.records ?? []) {
         next.push(record);
       }
+    }
+    for (const record of body.local ?? []) {
+      next.push(record);
     }
     next.sort((a, b) => (a.ts < b.ts ? 1 : -1));
     benchmarkRecords.value = next;
