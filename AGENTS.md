@@ -9,6 +9,7 @@
 - `docs/` — Architecture notes and design context.
 - `nix/` — Nix packaging + NixOS modules.
 - `data/` — Runtime JSONL logs/status history + stores (generated at runtime; ignored by git).
+- `dashboard/dist/` — Built UI assets (avoid manual edits; regenerate via build).
 
 ## Build, Test, and Development Commands
 - `cargo build` — Build the Rust workspace.
@@ -23,6 +24,12 @@
 - Rust: follow `rustfmt` defaults; use `snake_case` for functions and `CamelCase` for types.
 - TypeScript/Vue: keep components in `PascalCase` filenames and use `camelCase` for functions.
 - Keep modules small and purpose‑driven; prefer clear names over abbreviations.
+- Keep shared schema changes in sync across `crates/shared`, `dashboard/src/server`, and `dashboard/src/ui`.
+
+## Documentation & Comments
+- Add detailed, intentional comments for non-obvious logic and design decisions.
+- Prefer brief module-level notes for cross-cutting behavior, plus inline comments at tricky spots.
+- Avoid redundant comments for self-evident code; focus on why, not just what.
 
 ## Testing Guidelines
 - No automated tests are set up yet. If you add tests, keep them close to the module they cover.
