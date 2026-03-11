@@ -14,7 +14,7 @@ let
   configStore = cfg.configStore;
   dataDir = cfg.dataDir;
   baseEnv = [
-    "AIMAN_BIND=${cfg.host}:${cfg.port}"
+    "AIMAN_BIND=${cfg.host}:${toString cfg.port}"
     "AIMAN_DATA_DIR=${dataDir}"
     "AIMAN_CONFIG_STORE=${configStore}"
   ];
