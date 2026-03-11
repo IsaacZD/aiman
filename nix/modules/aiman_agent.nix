@@ -110,6 +110,12 @@ in
       description = "Skip GPU probing in hardware info.";
     };
 
+    extraPackages = lib.mkOption {
+      type = lib.types.listOf lib.types.package;
+      default = [];
+      description = "Extra packages added to PATH so the agent can spawn engine binaries (e.g. pkgs.llama-cpp).";
+    };
+
     environment = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = {};
@@ -139,6 +145,7 @@ in
       description = "aiman agent";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
+      path = cfg.extraPackages;
       serviceConfig = {
         Type = "simple";
         User = cfg.user;

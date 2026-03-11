@@ -361,9 +361,11 @@
           <button class="ghost" @click="closeHostModal">Close</button>
         </div>
         <form class="host-form" @submit.prevent="saveHost">
-          <label>
-            Host ID
-            <input v-model="hostForm.id" type="text" placeholder="llm-01" />
+          <label class="config-id-label">
+            <span class="config-id-title">Host ID</span>
+            <span class="config-id-value">
+              {{ hostForm.id || "auto-generated" }}
+            </span>
           </label>
           <label>
             Name
@@ -843,7 +845,10 @@ const modelPickerOnSelect = ref<((path: string) => void) | null>(null);
 const modelPickerQuery = ref("");
 const hostErrors = ref<string[]>([]);
 const hostMode = ref<"create" | "edit">("create");
-const hostForm = ref(createEmptyHostForm());
+const hostForm = ref({
+  ...createEmptyHostForm(),
+  id: generateHostId()
+});
 const showHostModal = ref(false);
 const modelArtifacts = ref<ModelArtifact[]>([]);
 const benchmarkRecords = ref<BenchmarkRecord[]>([]);
@@ -979,7 +984,7 @@ async function refreshAll() {
     const hostsBody = (await hostsRes.json()) as { hosts: Host[] };
     hosts.value = hostsBody.hosts ?? [];
     if (hosts.value.length && hostMode.value === "create" && !hostForm.value.id) {
-      hostForm.value = createEmptyHostForm();
+      resetHostForm();
     }
 
     const nextConfigNameByHost: Record<string, Record<string, string>> = {};
@@ -1383,6 +1388,13 @@ function generateConfigId() {
   return `cfg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function generateHostId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `host-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 async function loadConfigs() {
   configErrors.value = [];
   if (!configHostId.value) {
@@ -1424,7 +1436,10 @@ async function loadModels() {
 
 function resetHostForm() {
   hostMode.value = "create";
-  hostForm.value = createEmptyHostForm();
+  hostForm.value = {
+    ...createEmptyHostForm(),
+    id: generateHostId()
+  };
 }
 
 function openHostModal(host?: Host) {
@@ -1432,6 +1447,9 @@ function openHostModal(host?: Host) {
     editHost(host);
   } else {
     resetHostForm();
+    if (!hostForm.value.id) {
+      hostForm.value.id = generateHostId();
+    }
   }
   showHostModal.value = true;
 }
@@ -1454,9 +1472,10 @@ function editHost(host: Host) {
 
 async function saveHost() {
   hostErrors.value = [];
-  if (!hostForm.value.id.trim()) {
-    hostErrors.value = ["Host ID is required."];
-    return;
+  let hostId = (hostForm.value.id ?? "").toString().trim();
+  if (!hostId) {
+    hostId = generateHostId();
+    hostForm.value.id = hostId;
   }
   if (!hostForm.value.name.trim()) {
     hostErrors.value = ["Host name is required."];
@@ -1473,20 +1492,18 @@ async function saveHost() {
     .map((line) => line.trim())
     .filter(Boolean);
   const payload = {
-    id: hostForm.value.id.trim(),
+    id: hostId,
     name: hostForm.value.name.trim(),
     base_url: hostForm.value.base_url.trim(),
     ...(apiKey ? { api_key: apiKey } : {}),
     ...(modelLibraries.length ? { model_libraries: modelLibraries } : {})
   };
 
-  const method = hostMode.value === "create" ? "POST" : "PUT";
-  const url =
-    hostMode.value === "create"
-      ? "/api/hosts"
-      : `/api/hosts/${encodeURIComponent(payload.id)}`;
+  const isEdit = hostMode.value === "edit" && hosts.value.some((host) => host.id === payload.id);
+  const method = isEdit ? "PUT" : "POST";
+  const url = isEdit ? `/api/hosts/${encodeURIComponent(payload.id)}` : "/api/hosts";
 
-  if (hostMode.value === "edit" && !confirm(`Save changes to host "${payload.name}"?`)) {
+  if (isEdit && !confirm(`Save changes to host "${payload.name}"?`)) {
     return;
   }
 
@@ -1498,15 +1515,12 @@ async function saveHost() {
 
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    if (
-      res.status === 409 &&
-      hostMode.value === "create" &&
-      payload.id &&
-      confirm(`Host "${payload.id}" already exists. Edit it instead?`)
-    ) {
-      const existing = hosts.value.find((host) => host.id === payload.id);
-      if (existing) {
-        openHostModal(existing);
+    if (res.status === 409 && !isEdit && payload.id) {
+      if (confirm(`Host "${payload.id}" already exists. Edit it instead?`)) {
+        const existing = hosts.value.find((host) => host.id === payload.id);
+        if (existing) {
+          openHostModal(existing);
+        }
       }
       return;
     }
@@ -1537,10 +1551,11 @@ async function deleteHost(host: Host) {
 }
 
 async function deleteHostFromModal() {
-  if (!hostForm.value.id.trim()) {
+  const hostId = (hostForm.value.id ?? "").toString().trim();
+  if (!hostId) {
     return;
   }
-  await deleteHost({ id: hostForm.value.id, name: hostForm.value.name } as Host);
+  await deleteHost({ id: hostId, name: hostForm.value.name } as Host);
   closeHostModal();
 }
 
