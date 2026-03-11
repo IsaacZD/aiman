@@ -1,5 +1,7 @@
 # aiman
 
+WARNING: This is a vibe coding project that mainly serves my personal needs. If it fits your needs feel free to give it a shot, but I may not be able to provide much support.
+
 Local‑first LLM engine manager with a Rust agent and a Vue dashboard. The agent runs on LLM servers to start/stop engines and stream logs; the dashboard runs on a NAS to control multiple hosts over LAN.
 
 ## Features
