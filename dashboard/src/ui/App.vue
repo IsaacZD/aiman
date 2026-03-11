@@ -58,13 +58,16 @@
           :class="statusClass(engine.instance.status)"
           @click="selectEngine(engine)"
         >
+          <span
+            class="status-dot"
+            :class="statusDotClass(engine.instance.status)"
+          ></span>
           <header>
             <p class="engine-host">{{ engine.host.name }}</p>
-            <h3>{{ engine.instance.id }}</h3>
+            <h3>{{ engine.configName ?? engine.instance.id }}</h3>
             <p class="engine-type">{{ engine.instance.config_id }}</p>
           </header>
           <div class="engine-meta">
-            <span class="pill">{{ engine.instance.status }}</span>
             <span class="pill">PID {{ engine.instance.pid ?? "—" }}</span>
           </div>
           <div class="engine-actions">
@@ -132,7 +135,8 @@
             <article v-for="config in configs" :key="config.id" class="config-card">
               <div>
                 <h3>{{ config.name }}</h3>
-                <p class="config-meta">{{ config.id }} • {{ config.engine_type }}</p>
+                <p class="config-meta">{{ config.engine_type }}</p>
+                <p class="config-meta config-id">{{ config.id }}</p>
               </div>
               <div class="config-actions">
                 <button class="secondary" @click="openConfigModal(config)">Edit</button>
@@ -238,6 +242,14 @@
             API key (optional)
             <input v-model="hostForm.api_key" type="password" placeholder="dev-secret" />
           </label>
+          <label>
+            Model libraries (one path per line)
+            <textarea
+              v-model="hostForm.model_libraries_text"
+              rows="3"
+              placeholder="/data/huggingface\n/mnt/models/hf"
+            ></textarea>
+          </label>
           <div class="form-actions">
             <button
               v-if="hostMode === 'edit'"
@@ -261,10 +273,18 @@
           <h3>{{ configMode === "create" ? "Create config" : "Edit config" }}</h3>
           <button class="ghost" @click="closeConfigModal">Close</button>
         </div>
+        <div v-if="configErrors.length" class="alert">
+          <p v-for="error in configErrors" :key="error">{{ error }}</p>
+        </div>
         <form class="config-form" @submit.prevent="saveConfig">
           <label>
             Config ID
-            <input v-model="configForm.id" type="text" placeholder="deepseek-vllm" />
+            <input
+              v-model="configForm.id"
+              type="text"
+              placeholder="auto-generated"
+              readonly
+            />
           </label>
           <label>
             Display name
@@ -287,14 +307,17 @@
             <VllmConfigFields
               v-if="configForm.engine_type === 'Vllm'"
               v-model="vllmArgsForm"
+              :model-options="vllmModelOptions"
             />
             <LlamaCppConfigFields
               v-else-if="configForm.engine_type === 'LlamaCpp'"
               v-model="llamaCppArgsForm"
+              :model-options="ggufModelOptions"
             />
             <KTransformersConfigFields
               v-else-if="configForm.engine_type === 'KTransformers'"
               v-model="kTransformersArgsForm"
+              :model-options="ggufModelOptions"
             />
             <CustomConfigFields v-else v-model="customArgsForm" />
           </div>
@@ -371,6 +394,7 @@ type Host = {
   name: string;
   base_url: string;
   api_key?: string;
+  model_libraries?: string[];
 };
 
 type EnvVar = {
@@ -404,6 +428,7 @@ type EngineInstance = {
 type EngineItem = {
   host: Host;
   instance: EngineInstance;
+  configName?: string;
 };
 
 type EnginesResult = {
@@ -416,6 +441,14 @@ type LogEntry = {
   ts: string;
   stream: string;
   line: string;
+};
+
+type ModelArtifact = {
+  id: string;
+  kind: "snapshot" | "gguf" | string;
+  path: string;
+  label: string;
+  library: string;
 };
 
 // High-level UI state.
@@ -436,6 +469,7 @@ const configs = ref<EngineConfig[]>([]);
 const configErrors = ref<string[]>([]);
 const configMode = ref<"create" | "edit">("create");
 const configForm = ref(createEmptyConfigForm());
+const configOriginalId = ref<string | null>(null);
 const vllmArgsForm = ref(createVllmArgsForm());
 const llamaCppArgsForm = ref(createLlamaCppArgsForm());
 const kTransformersArgsForm = ref(createKTransformersArgsForm());
@@ -445,9 +479,17 @@ const hostErrors = ref<string[]>([]);
 const hostMode = ref<"create" | "edit">("create");
 const hostForm = ref(createEmptyHostForm());
 const showHostModal = ref(false);
+const modelArtifacts = ref<ModelArtifact[]>([]);
 
 const selectedHost = computed(() =>
   hosts.value.find((host) => host.id === configHostId.value) ?? null
+);
+
+const vllmModelOptions = computed(() =>
+  modelArtifacts.value.filter((artifact) => artifact.kind === "snapshot")
+);
+const ggufModelOptions = computed(() =>
+  modelArtifacts.value.filter((artifact) => artifact.kind === "gguf")
 );
 
 const defaultCommands: Record<EngineConfig["engine_type"], string> = {
@@ -485,6 +527,26 @@ async function refreshAll() {
       hostForm.value = createEmptyHostForm();
     }
 
+    const configNameByHost = new Map<string, Map<string, string>>();
+    await Promise.all(
+      hosts.value.map(async (host) => {
+        try {
+          const res = await fetch(`/api/hosts/${host.id}/configs`);
+          if (!res.ok) {
+            return;
+          }
+          const body = (await res.json()) as { configs: EngineConfig[] };
+          const map = new Map<string, string>();
+          for (const config of body.configs ?? []) {
+            map.set(config.id, config.name);
+          }
+          configNameByHost.set(host.id, map);
+        } catch {
+          // Ignore config load failures here; engines list can still render.
+        }
+      })
+    );
+
     const enginesRes = await fetch("/api/engines");
     const enginesBody = (await enginesRes.json()) as { results: EnginesResult[] };
 
@@ -495,7 +557,10 @@ async function refreshAll() {
         continue;
       }
       for (const instance of result.engines ?? []) {
-        nextEngines.push({ host: result.host, instance });
+        const configName = configNameByHost
+          .get(result.host.id)
+          ?.get(instance.config_id);
+        nextEngines.push({ host: result.host, instance, configName });
       }
     }
     engines.value = nextEngines;
@@ -604,12 +669,26 @@ function statusClass(status: string) {
   return `status-${status.toLowerCase()}`;
 }
 
+function statusDotClass(status: string) {
+  if (status === "Running") {
+    return "is-running";
+  }
+  if (status === "Starting") {
+    return "is-starting";
+  }
+  if (status === "Stopped") {
+    return "is-stopped";
+  }
+  return "is-unknown";
+}
+
 function createEmptyHostForm() {
   return {
     id: "",
     name: "",
     base_url: "",
-    api_key: ""
+    api_key: "",
+    model_libraries_text: ""
   };
 }
 
@@ -625,6 +704,13 @@ function createEmptyConfigForm() {
     auto_restart_max_retries: 0,
     auto_restart_backoff_secs: 5
   };
+}
+
+function generateConfigId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `cfg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 async function loadConfigs() {
@@ -645,6 +731,24 @@ async function loadConfigs() {
     configs.value = body.configs ?? [];
   } catch (err) {
     configErrors.value = [(err as Error).message];
+  }
+}
+
+async function loadModels() {
+  if (!configHostId.value) {
+    modelArtifacts.value = [];
+    return;
+  }
+  try {
+    const res = await fetch(`/api/hosts/${configHostId.value}/models`);
+    if (!res.ok) {
+      modelArtifacts.value = [];
+      return;
+    }
+    const body = (await res.json()) as { artifacts: ModelArtifact[] };
+    modelArtifacts.value = body.artifacts ?? [];
+  } catch {
+    modelArtifacts.value = [];
   }
 }
 
@@ -673,7 +777,8 @@ function editHost(host: Host) {
     id: host.id,
     name: host.name,
     base_url: host.base_url,
-    api_key: host.api_key ?? ""
+    api_key: host.api_key ?? "",
+    model_libraries_text: (host.model_libraries ?? []).join("\n")
   };
 }
 
@@ -693,11 +798,16 @@ async function saveHost() {
   }
 
   const apiKey = hostForm.value.api_key.trim();
+  const modelLibraries = hostForm.value.model_libraries_text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
   const payload = {
     id: hostForm.value.id.trim(),
     name: hostForm.value.name.trim(),
     base_url: hostForm.value.base_url.trim(),
-    ...(apiKey ? { api_key: apiKey } : {})
+    ...(apiKey ? { api_key: apiKey } : {}),
+    ...(modelLibraries.length ? { model_libraries: modelLibraries } : {})
   };
 
   const method = hostMode.value === "create" ? "POST" : "PUT";
@@ -739,6 +849,9 @@ async function saveHost() {
   closeHostModal();
   resetHostForm();
   await refreshAll();
+  if (configHostId.value === payload.id) {
+    await loadModels();
+  }
 }
 
 async function deleteHost(host: Host) {
@@ -763,7 +876,11 @@ async function deleteHostFromModal() {
 
 function resetConfigForm() {
   configMode.value = "create";
-  configForm.value = createEmptyConfigForm();
+  configForm.value = {
+    ...createEmptyConfigForm(),
+    id: generateConfigId()
+  };
+  configOriginalId.value = null;
   vllmArgsForm.value = createVllmArgsForm();
   llamaCppArgsForm.value = createLlamaCppArgsForm();
   kTransformersArgsForm.value = createKTransformersArgsForm();
@@ -783,6 +900,7 @@ function openConfigModal(config?: EngineConfig) {
   if (!configForm.value.command.trim()) {
     configForm.value.command = defaultCommands[configForm.value.engine_type];
   }
+  loadModels();
   showConfigModal.value = true;
 }
 
@@ -793,6 +911,7 @@ function closeConfigModal() {
 
 function editConfig(config: EngineConfig) {
   configMode.value = "edit";
+  configOriginalId.value = config.id;
   configForm.value = {
     id: config.id,
     name: config.name,
@@ -873,10 +992,65 @@ async function saveConfig() {
   }
 
   const method = configMode.value === "create" ? "POST" : "PUT";
+  const targetId = configMode.value === "edit" ? configOriginalId.value : null;
+  if (configMode.value === "edit" && !targetId) {
+    configErrors.value = ["Original Config ID is missing; reload the page and try again."];
+    return;
+  }
+  const isRename =
+    configMode.value === "edit" && targetId !== null && targetId !== config.id;
+
   const url =
     configMode.value === "create"
       ? `/api/hosts/${configHostId.value}/configs`
-      : `/api/hosts/${configHostId.value}/configs/${encodeURIComponent(config.id)}`;
+      : `/api/hosts/${configHostId.value}/configs/${encodeURIComponent(targetId!)}`;
+
+  const parseError = async (res: Response) => {
+    const rawBody = await res.text().catch(() => "");
+    if (!rawBody) {
+      return `Save failed (HTTP ${res.status}).`;
+    }
+    try {
+      const parsed = JSON.parse(rawBody) as { error?: string; message?: string };
+      return `Save failed: ${parsed.error ?? parsed.message ?? rawBody}`;
+    } catch {
+      return `Save failed: ${rawBody}`;
+    }
+  };
+
+  if (isRename) {
+    const createRes = await fetch(`/api/hosts/${configHostId.value}/configs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config)
+    });
+
+    if (!createRes.ok) {
+      configErrors.value = [await parseError(createRes)];
+      return;
+    }
+
+    const deleteRes = await fetch(
+      `/api/hosts/${configHostId.value}/configs/${encodeURIComponent(targetId!)}`,
+      { method: "DELETE" }
+    );
+
+    if (!deleteRes.ok) {
+      const suffix = `Delete failed (HTTP ${deleteRes.status}).`;
+      configErrors.value = [
+        `Rename partially succeeded: new config created, but old config was not deleted. ${suffix}`
+      ];
+      await loadConfigs();
+      await refreshAll();
+      return;
+    }
+
+    closeConfigModal();
+    resetConfigForm();
+    await loadConfigs();
+    await refreshAll();
+    return;
+  }
 
   const res = await fetch(url, {
     method,
@@ -885,10 +1059,7 @@ async function saveConfig() {
   });
 
   if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    configErrors.value = [
-      body?.error ? `Save failed: ${body.error}` : `Save failed (HTTP ${res.status}).`
-    ];
+    configErrors.value = [await parseError(res)];
     return;
   }
 
@@ -931,6 +1102,7 @@ function selectHost(host: Host) {
   }
   configHostId.value = host.id;
   loadConfigs();
+  loadModels();
 }
 
 function parseEnvLines(raw: string, errors: string[]) {

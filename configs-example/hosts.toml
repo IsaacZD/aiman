@@ -3,9 +3,11 @@ id = "llm-01"
 name = "LLM Server 01"
 base_url = "http://localhost:4010"
 api_key = ""
+model_libraries = ["/data/huggingface", "/mnt/models/hf"]
 
 [[host]]
 id = "llm-02"
 name = "LLM Server 02"
 base_url = "https://llm-02.lan:4010"
 api_key = "change-me"
+model_libraries = ["/mnt/llm/models/hf"]

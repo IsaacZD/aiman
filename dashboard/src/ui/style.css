@@ -216,6 +216,7 @@ h2 {
   gap: 12px;
   cursor: pointer;
   transition: border-color 0.2s ease, transform 0.2s ease;
+  position: relative;
 }
 
 .engine:hover {
@@ -236,13 +237,45 @@ h2 {
 .engine-type {
   margin: 0;
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.8rem;
+  opacity: 0.8;
 }
 
 .engine-meta {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.status-dot {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #f45b5b;
+  box-shadow: 0 0 8px rgba(244, 91, 91, 0.6);
+}
+
+.status-dot.is-running {
+  background: #3ad27c;
+  box-shadow: 0 0 8px rgba(58, 210, 124, 0.6);
+}
+
+.status-dot.is-starting {
+  background: #f2c94c;
+  box-shadow: 0 0 8px rgba(242, 201, 76, 0.6);
+}
+
+.status-dot.is-stopped {
+  background: #f45b5b;
+  box-shadow: 0 0 8px rgba(244, 91, 91, 0.6);
+}
+
+.status-dot.is-unknown {
+  background: #98a2b3;
+  box-shadow: 0 0 8px rgba(152, 162, 179, 0.5);
 }
 
 .pill {
@@ -378,6 +411,11 @@ h2 {
   font-size: 0.85rem;
 }
 
+.config-id {
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
 .config-actions {
   display: flex;
   flex-direction: column;
@@ -416,6 +454,11 @@ h2 {
   font-size: 0.95rem;
   background: rgba(8, 12, 20, 0.9);
   color: var(--ink);
+}
+
+.config-form input[readonly] {
+  opacity: 0.75;
+  cursor: default;
 }
 
 .config-form textarea {

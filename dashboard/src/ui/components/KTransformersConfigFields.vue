@@ -2,7 +2,17 @@
   <div class="engine-fields">
     <label>
       Model path
-      <input v-model="form.modelPath" type="text" placeholder="/models/ktr.gguf" />
+      <input
+        v-model="form.modelPath"
+        type="text"
+        placeholder="/models/ktr.gguf"
+        :list="modelListId"
+      />
+      <datalist v-if="modelOptions.length" :id="modelListId">
+        <option v-for="option in modelOptions" :key="option.path" :value="option.path">
+          {{ option.label }}
+        </option>
+      </datalist>
     </label>
     <label>
       Port (optional)
@@ -16,8 +26,16 @@
 </template>
 
 <script setup lang="ts">
-import { defineModel } from "vue";
+import { computed, defineModel } from "vue";
 import type { KTransformersArgsForm } from "../engine-args/kTransformers";
 
+type ModelOption = {
+  path: string;
+  label: string;
+};
+
+const props = defineProps<{ modelOptions?: ModelOption[] }>();
 const form = defineModel<KTransformersArgsForm>({ required: true });
+const modelListId = "ktransformers-models";
+const modelOptions = computed(() => props.modelOptions ?? []);
 </script>

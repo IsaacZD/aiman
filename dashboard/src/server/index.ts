@@ -12,6 +12,7 @@ type HostConfig = {
   name: string;
   base_url: string;
   api_key?: string;
+  model_libraries?: string[];
 };
 
 type HostsFile = {
@@ -92,6 +93,31 @@ server.delete("/api/hosts/:hostId", async (request, reply) => {
   }
   await persistHosts(next);
   return reply.code(200).send({ ok: true });
+});
+
+// Proxy model scan request to the selected host.
+server.get("/api/hosts/:hostId/models", async (request, reply) => {
+  const { hostId } = request.params as { hostId: string };
+  const host = await findHost(hostId);
+  if (!host) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+
+  const libraries = Array.isArray(host.model_libraries) ? host.model_libraries : [];
+  if (!libraries.length) {
+    return reply.code(200).send({ artifacts: [] });
+  }
+
+  const res = await fetch(`${host.base_url}/v1/models/scan`, {
+    method: "POST",
+    headers: {
+      ...(host.api_key ? { Authorization: `Bearer ${host.api_key}` } : {}),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ libraries })
+  });
+  const body = await safeJson(res);
+  return reply.code(res.status).send(body ?? { ok: res.ok });
 });
 
 // Aggregate engine lists across all configured hosts.

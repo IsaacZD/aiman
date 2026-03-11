@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use aiman_shared::{EngineConfig, EngineInstance, LogEntry};
 
+use crate::models::scan_model_libraries;
 use crate::state::AppState;
 use crate::supervisor::{map_supervisor_error, read_jsonl};
 
@@ -222,6 +223,29 @@ pub async fn delete_config(
         .await
         .map_err(map_supervisor_error)?;
     Ok(Json(DeleteResponse { ok: true }))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ModelScanRequest {
+    libraries: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ModelScanResponse {
+    artifacts: Vec<crate::models::ModelArtifact>,
+}
+
+pub async fn scan_models(
+    State(_state): State<AppState>,
+    Json(request): Json<ModelScanRequest>,
+) -> Result<Json<ModelScanResponse>, StatusCode> {
+    tracing::info!(count = request.libraries.len(), "model scan requested");
+    let libraries = request.libraries.clone();
+    let artifacts = tokio::task::spawn_blocking(move || scan_model_libraries(&libraries))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tracing::info!(count = artifacts.len(), "model scan completed");
+    Ok(Json(ModelScanResponse { artifacts }))
 }
 
 #[derive(Serialize)]

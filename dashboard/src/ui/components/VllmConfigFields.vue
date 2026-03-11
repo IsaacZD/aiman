@@ -2,7 +2,17 @@
   <div class="engine-fields">
     <label>
       Model path or name
-      <input v-model="form.modelPath" type="text" placeholder="/models/llama" />
+      <input
+        v-model="form.modelPath"
+        type="text"
+        placeholder="/models/llama"
+        :list="modelListId"
+      />
+      <datalist v-if="modelOptions.length" :id="modelListId">
+        <option v-for="option in modelOptions" :key="option.path" :value="option.path">
+          {{ option.label }}
+        </option>
+      </datalist>
     </label>
     <label>
       Port (optional)
@@ -20,8 +30,16 @@
 </template>
 
 <script setup lang="ts">
-import { defineModel } from "vue";
+import { computed, defineModel } from "vue";
 import type { VllmArgsForm } from "../engine-args/vllm";
 
+type ModelOption = {
+  path: string;
+  label: string;
+};
+
+const props = defineProps<{ modelOptions?: ModelOption[] }>();
 const form = defineModel<VllmArgsForm>({ required: true });
+const modelListId = "vllm-models";
+const modelOptions = computed(() => props.modelOptions ?? []);
 </script>
