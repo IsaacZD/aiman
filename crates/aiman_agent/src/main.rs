@@ -87,6 +87,6 @@ async fn main() {
         .await
         .expect("bind host listener");
 
-    tracing::info!("aiman-host listening on {bind_addr}");
+    tracing::info!("aiman_agent listening on {bind_addr}");
     axum::serve(listener, app).await.expect("serve host");
 }

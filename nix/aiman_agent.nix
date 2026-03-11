@@ -1,7 +1,7 @@
 { lib, rustPlatform, pkg-config, openssl }:
 
 rustPlatform.buildRustPackage {
-  pname = "aiman-host";
+  pname = "aiman_agent";
   version = "0.1.0";
   src = lib.cleanSourceWith {
     src = ../.;
@@ -15,11 +15,11 @@ rustPlatform.buildRustPackage {
   nativeBuildInputs = [ pkg-config ];
   buildInputs = [ openssl ];
 
-  cargoBuildFlags = [ "-p" "aiman-host" ];
+  cargoBuildFlags = [ "-p" "aiman_agent" ];
   doCheck = false;
 
   meta = with lib; {
-    description = "aiman host agent";
+    description = "aiman agent";
     license = licenses.mit;
     platforms = platforms.linux;
   };

@@ -1,21 +1,23 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `crates/host/` — Rust binary that runs on LLM servers (process supervision, API, log streaming).
+- `crates/aiman_agent/` — Rust binary that runs on LLM servers (process supervision, API, log streaming).
 - `crates/shared/` — Shared Rust types used by host and dashboard.
 - `dashboard/src/server/` — Fastify server that proxies host APIs and serves the UI.
 - `dashboard/src/ui/` — Vue 3 UI (Vite).
-- `configs/` — Host and engine TOML configs (`hosts.toml`, `engines.toml`).
+- `configs-example/` — Sample host/engine TOML configs (`dashboard/hosts.toml`, `agent/engines.toml`).
 - `docs/` — Architecture notes and design context.
-- `data/` — Runtime JSONL logs/status history (generated at runtime; ignored by git).
+- `nix/` — Nix packaging + NixOS modules.
+- `data/` — Runtime JSONL logs/status history + stores (generated at runtime; ignored by git).
 
 ## Build, Test, and Development Commands
 - `cargo build` — Build the Rust workspace.
-- `cargo run -p aiman-host` — Run the host API locally.
+- `cargo run -p aiman_agent` — Run the agent API locally.
 - `npm --prefix dashboard install` — Install dashboard dependencies.
 - `npm --prefix dashboard run dev` — Run the Vite UI dev server.
 - `npm --prefix dashboard run build` — Build the production UI assets.
 - `npm --prefix dashboard run serve` — Run the dashboard Fastify server.
+- For local dev, copy the seeds into `config/` if you want to use the dev shell defaults, or update the dev shell env vars in `flake.nix` (uses `./config/agent/engines.toml` and `../config/dashboard/hosts.toml` by default).
 
 ## Coding Style & Naming Conventions
 - Rust: follow `rustfmt` defaults; use `snake_case` for functions and `CamelCase` for types.
@@ -32,8 +34,8 @@
 - PRs should include a short summary, testing notes, and screenshots for UI changes.
 
 ## Security & Configuration Notes
-- Host auth uses a bearer token if `AIMAN_API_KEY` is set.
+- Agent auth uses a bearer token if `AIMAN_API_KEY` is set.
 - Config paths:
-  - Host: `AIMAN_ENGINES_CONFIG`, `AIMAN_DATA_DIR`
-  - Dashboard: `AIMAN_HOSTS_CONFIG`, `AIMAN_DASHBOARD_PORT`, `AIMAN_DASHBOARD_BIND`
+  - Agent: `AIMAN_API_KEY`, `AIMAN_BIND`, `AIMAN_DATA_DIR`, `AIMAN_CONFIG_STORE`, `AIMAN_ENGINES_CONFIG`
+  - Dashboard: `AIMAN_HOSTS_CONFIG`, `AIMAN_HOSTS_STORE`, `AIMAN_DASHBOARD_BENCHMARKS`, `AIMAN_DASHBOARD_PORT`, `AIMAN_DASHBOARD_BIND`
 - Treat configs as LAN‑only but avoid committing secrets.

@@ -1,4 +1,4 @@
-//! Shared data contracts between host and dashboard.
+//! Shared data contracts between agent and dashboard.
 //! Keep this crate dependency-light so both sides can reuse it for schemas.
 
 use serde::{Deserialize, Serialize};

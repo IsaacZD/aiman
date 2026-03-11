@@ -1,6 +1,6 @@
 [workspace]
 members = [
-  "crates/host",
+  "crates/aiman_agent",
   "crates/shared",
 ]
 resolver = "2"

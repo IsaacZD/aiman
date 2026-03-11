@@ -12,7 +12,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "aiman-host"
+name = "aiman-shared"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "aiman_agent"
 version = "0.1.0"
 dependencies = [
  "aiman-shared",
@@ -29,14 +37,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "aiman-shared"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]

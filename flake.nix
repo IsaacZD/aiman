@@ -1,5 +1,5 @@
 {
-  description = "aiman - local LLM engine manager (host + dashboard)";
+  description = "aiman - local LLM engine manager (agent + dashboard)";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-25.11";
@@ -10,7 +10,7 @@
     let
       overlays = {
         default = final: prev: {
-          aiman-host = final.callPackage ./nix/aiman-host.nix { };
+          aiman_agent = final.callPackage ./nix/aiman_agent.nix { };
           aiman-dashboard = final.callPackage ./nix/aiman-dashboard.nix { };
         };
       };
@@ -21,9 +21,9 @@
       in
       {
         packages = {
-          aiman-host = pkgs.aiman-host;
+          aiman_agent = pkgs.aiman_agent;
           aiman-dashboard = pkgs.aiman-dashboard;
-          default = pkgs.aiman-host;
+          default = pkgs.aiman_agent;
         };
 
         devShells.default = pkgs.mkShell {
@@ -41,24 +41,24 @@
 
           RUST_BACKTRACE = "1";
 
-          # host
+          # agent
           AIMAN_BIND = "127.0.0.1:4010";
-          AIMAN_DATA_DIR = "./mock/host/data";
-          # AIMAN_CONFIG_STORE = "./mock/host/data/configs.json";
-          AIMAN_ENGINES_CONFIG = "./mock/host/engines.toml";
+          AIMAN_DATA_DIR = "./config/agent/data";
+          # AIMAN_CONFIG_STORE = "./config/agent/data/configs.json";
+          AIMAN_ENGINES_CONFIG = "./config/agent/engines.toml";
           # AIMAN_API_KEY = "";
 
           # dashboard
-          AIMAN_HOSTS_CONFIG = "../mock/dashboard/hosts.toml"; # need .. because the work dir is dashboard
+          AIMAN_HOSTS_CONFIG = "../config/dashboard/hosts.toml"; # need .. because the work dir is dashboard
         };
 
         apps = {
-          aiman-host = flake-utils.lib.mkApp {
+          aiman_agent = flake-utils.lib.mkApp {
             drv = pkgs.writeShellApplication {
-              name = "aiman-host";
+              name = "aiman_agent";
               runtimeInputs = with pkgs; [ cargo ];
               text = ''
-                cargo run -p aiman-host "$@"
+                cargo run -p aiman_agent "$@"
               '';
             };
           };
@@ -77,7 +77,7 @@
       }) // {
       overlays = overlays;
       nixosModules = {
-        aiman-host = import ./nix/modules/host.nix;
+        aiman_agent = import ./nix/modules/aiman_agent.nix;
         aiman-dashboard = import ./nix/modules/dashboard.nix;
       };
     };

@@ -1,7 +1,7 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.services.aiman-host;
+  cfg = config.services.aiman_agent;
   envList = lib.mapAttrsToList (name: value: "${name}=${toString value}") cfg.environment;
   apiKeyEnv = lib.optional (cfg.apiKey != null) "AIMAN_API_KEY=${cfg.apiKey}";
   seedEnv = lib.optional (cfg.seedConfig != null) "AIMAN_ENGINES_CONFIG=${cfg.seedConfig}";
@@ -18,22 +18,22 @@ let
   portStr = lib.last (lib.splitString ":" bindAddr);
   hostPort = lib.tryEval (lib.toInt portStr);
   openFirewall = cfg.openFirewall && hostPort.success;
-  isDefaultDataDir = cfg.dataDir == "/var/lib/aiman/host";
-  isDefaultStore = cfg.configStore == "/var/lib/aiman/host/configs.json";
+  isDefaultDataDir = cfg.dataDir == "/var/lib/aiman/agent";
+  isDefaultStore = cfg.configStore == "/var/lib/aiman/agent/configs.json";
   tmpRules =
     (lib.optional isDefaultDataDir "d ${cfg.dataDir} 0750 ${cfg.user} ${cfg.group} -")
-    ++ (lib.optional isDefaultStore "d /var/lib/aiman/host 0750 ${cfg.user} ${cfg.group} -")
+    ++ (lib.optional isDefaultStore "d /var/lib/aiman/agent 0750 ${cfg.user} ${cfg.group} -")
     ++ (lib.optional isDefaultStore "f ${cfg.configStore} 0640 ${cfg.user} ${cfg.group} -");
 
 in
 {
-  options.services.aiman-host = {
-    enable = lib.mkEnableOption "aiman host agent";
+  options.services.aiman_agent = {
+    enable = lib.mkEnableOption "aiman agent";
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.aiman-host;
-      description = "aiman host package.";
+      default = pkgs.aiman_agent;
+      description = "aiman agent package.";
     };
 
     user = lib.mkOption {
@@ -50,14 +50,14 @@ in
 
     dataDir = lib.mkOption {
       type = lib.types.str;
-      default = "/var/lib/aiman/host";
+      default = "/var/lib/aiman/agent";
       description = "Data directory for log/status history and config store.";
     };
 
     configStore = lib.mkOption {
       type = lib.types.str;
-      default = "/var/lib/aiman/host/configs.json";
-      description = "Path to the JSON config store used by the host.";
+      default = "/var/lib/aiman/agent/configs.json";
+      description = "Path to the JSON config store used by the agent.";
     };
 
     seedConfig = lib.mkOption {
@@ -69,25 +69,25 @@ in
     bind = lib.mkOption {
       type = lib.types.str;
       default = "0.0.0.0:4010";
-      description = "Bind address for the host API.";
+      description = "Bind address for the agent API.";
     };
 
     apiKey = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      description = "Bearer token for host authentication.";
+      description = "Bearer token for agent authentication.";
     };
 
     environment = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = {};
-      description = "Additional environment variables for the host service.";
+      description = "Additional environment variables for the agent service.";
     };
 
     openFirewall = lib.mkOption {
       type = lib.types.bool;
       default = false;
-      description = "Open the host API port in the firewall.";
+      description = "Open the agent API port in the firewall.";
     };
   };
 
@@ -103,15 +103,15 @@ in
       aiman = {};
     };
 
-    systemd.services.aiman-host = {
-      description = "aiman host agent";
+    systemd.services.aiman_agent = {
+      description = "aiman agent";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
       serviceConfig = {
         Type = "simple";
         User = cfg.user;
         Group = cfg.group;
-        ExecStart = "${cfg.package}/bin/aiman-host";
+        ExecStart = "${cfg.package}/bin/aiman_agent";
         Environment = fullEnv;
         Restart = "on-failure";
         RestartSec = 2;

@@ -1,34 +1,36 @@
 # aiman
 
-Local‑first LLM engine manager with a Rust host agent and a Vue dashboard. The host runs on LLM servers to start/stop engines and stream logs; the dashboard runs on a NAS to control multiple hosts over LAN.
+Local‑first LLM engine manager with a Rust agent and a Vue dashboard. The agent runs on LLM servers to start/stop engines and stream logs; the dashboard runs on a NAS to control multiple hosts over LAN.
 
 ## Features
 - Start/stop engines (vLLM, llama.cpp, ktransformers, etc.) per config.
 - Live log streaming and JSONL log/status history.
 - Web UI config management (create/edit/delete configs per host).
 - Web UI host management (add/update/remove hosts).
-- Simple bearer‑token auth between dashboard and host.
+- Simple bearer‑token auth between dashboard and agent.
 - Nix‑first dev environment via `flake.nix`.
 
 ## Repository Layout
-- `crates/host/` — Rust host binary (process supervisor + API).
+- `crates/aiman_agent/` — Rust agent binary (process supervisor + API).
 - `crates/shared/` — Shared Rust types.
 - `dashboard/` — Vue UI + Fastify server.
-- `configs/` — Optional `hosts.toml` + `engines.toml` seed.
+- `configs-example/` — Sample seed configs (`agent/engines.toml`, `dashboard/hosts.toml`).
 - `docs/` — Architecture notes.
+- `nix/` — Nix packaging + NixOS modules.
+- `data/` — Runtime JSONL logs/status history + stores (generated at runtime; ignored by git).
 
-## Quickstart (Host)
+## Quickstart (Agent)
 ```bash
 export AIMAN_API_KEY="dev-secret"
 export AIMAN_BIND="0.0.0.0:4010"
-export AIMAN_DATA_DIR="/path/to/aiman/data"
-export AIMAN_CONFIG_STORE="/path/to/aiman/data/configs.json"
-export AIMAN_ENGINES_CONFIG="/path/to/aiman/data/engines.toml"
+export AIMAN_DATA_DIR="/path/to/data"
+export AIMAN_CONFIG_STORE="/path/to/configs.json"
+export AIMAN_ENGINES_CONFIG="/path/to/engines.toml"
 
-cargo run -p aiman-host
+cargo run -p aiman_agent
 ```
 
-The host keeps configs in `AIMAN_CONFIG_STORE` and the dashboard can add/update/remove them. If you want to seed configs from a TOML file on first launch, set `AIMAN_ENGINES_CONFIG` to an `engines.toml` path.
+The agent keeps configs in `AIMAN_CONFIG_STORE` and the dashboard can add/update/remove them. If you want to seed configs from a TOML file on first launch, set `AIMAN_ENGINES_CONFIG` to an `engines.toml` path.
 
 ## Quickstart (Dashboard)
 ```bash
@@ -37,27 +39,42 @@ npm --prefix dashboard run build
 npm --prefix dashboard run serve
 ```
 
-Open the UI at `http://<NAS_IP>:4020` and add hosts from the Hosts panel. If you want to seed hosts on first launch, set `AIMAN_HOSTS_CONFIG` to a `hosts.toml` path.
+Open the UI at `http://<NAS_IP>:4020` and add hosts from the Hosts panel. If you want to seed hosts on first launch, set `AIMAN_HOSTS_CONFIG` to a `hosts.toml` path (for example `configs-example/dashboard/hosts.toml`).
 
 ## Development
 - Build Rust workspace: `cargo build`
-- Run host: `cargo run -p aiman-host`
+- Run agent: `cargo run -p aiman_agent`
 - Run UI dev server: `npm --prefix dashboard run dev`
 
+For development, you can copy seed configs into `config/` (the dev shell paths in `flake.nix`):
+```bash
+cp -n configs-example/agent/engines.toml config/agent/engines.toml
+cp -n configs-example/dashboard/hosts.toml config/dashboard/hosts.toml
+```
+The dev shell in `flake.nix` points `AIMAN_ENGINES_CONFIG` at `./config/agent/engines.toml` and `AIMAN_HOSTS_CONFIG` at `../config/dashboard/hosts.toml` (expected when running the dashboard from `dashboard/` or via `npm --prefix dashboard ...`). Update those env vars if you want different paths or run from the repo root.
+
 ## Notes
-- Host API uses Axum 0.8 route params: `/v1/engines/{id}`.
-- Logs, status snapshots, and the config store are stored in `AIMAN_DATA_DIR`.
+- Agent API uses Axum 0.8 route params: `/v1/engines/{id}`.
+- Logs, status snapshots, and the config store live under `AIMAN_DATA_DIR` (default `data`).
 - Dashboard hosts are stored in `AIMAN_HOSTS_STORE` (default `data/hosts.json`).
+- Dashboard benchmark history is stored in `AIMAN_DASHBOARD_BENCHMARKS` (default `data/benchmarks-dashboard.jsonl`).
 
 ## Nix
-Enter the dev shell:
+### Dev shell workflow
+The dev shell provides Rust + Node.js and preconfigures local env vars for agent + dashboard development.
 ```bash
 nix develop
 ```
+If you haven't seeded configs yet:
+```bash
+cp -n configs-example/agent/engines.toml config/agent/engines.toml
+cp -n configs-example/dashboard/hosts.toml config/dashboard/hosts.toml
+```
+
 This provides Rust and Node.js.
 
 ### Packages
-- `packages.aiman-host` builds the host binary.
+- `packages.aiman_agent` builds the agent binary.
 - `packages.aiman-dashboard` builds the dashboard server + UI (uses `buildNpmPackage`).
 
 If the dashboard build fails due to `npmDepsHash`, replace the placeholder hash in `nix/aiman-dashboard.nix` with the value printed by Nix.
@@ -68,7 +85,7 @@ Enable the services and overlay in your system config:
 {
   nixpkgs.overlays = [ inputs.aiman.overlays.default ];
 
-  services.aiman-host = {
+  services.aiman_agent = {
     enable = true;
     apiKey = "dev-secret";
     openFirewall = true;
@@ -82,5 +99,5 @@ Enable the services and overlay in your system config:
 ```
 
 Key options:
-- Host: `services.aiman-host.dataDir`, `configStore`, `seedConfig`, `bind`, `apiKey`.
+- Agent: `services.aiman_agent.dataDir`, `configStore`, `seedConfig`, `bind`, `apiKey`.
 - Dashboard: `services.aiman-dashboard.hostsStore`, `hostsConfig`, `bind`, `port`.
