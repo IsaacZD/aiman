@@ -20,14 +20,6 @@
       <button class="tab" :class="{ active: mainTab === 'engines' }" @click="mainTab = 'engines'">
         Engines
       </button>
-      <button
-        class="tab"
-        :class="{ active: mainTab === 'detail' }"
-        :disabled="!selected"
-        @click="mainTab = 'detail'"
-      >
-        Engine detail
-      </button>
       <button class="tab" :class="{ active: mainTab === 'admin' }" @click="mainTab = 'admin'">
         Admin
       </button>
@@ -56,7 +48,7 @@
           :key="engine.instance.id"
           class="engine"
           :class="statusClass(engine.instance.status)"
-          @click="selectEngine(engine)"
+          @click="openDetailModal(engine)"
         >
           <span
             class="status-dot"
@@ -148,76 +140,59 @@
       </div>
     </section>
 
-    <section v-if="mainTab === 'detail'" class="panel">
-      <div class="panel-head">
-        <div>
-          <h2>Engine detail</h2>
-          <p class="panel-sub">
-            {{ selected ? `${selected.host.name} • ${selected.instance.id}` : "Pick an engine" }}
-          </p>
+    <div v-if="showDetailModal" class="modal-backdrop">
+      <div class="modal modal-wide">
+        <div class="modal-head">
+          <h3>Engine detail</h3>
+          <button class="ghost" @click="closeDetailModal">Close</button>
         </div>
-        <div class="tabs">
-          <button
-            class="tab"
-            :class="{ active: detailTab === 'live' }"
-            @click="detailTab = 'live'"
-          >
-            Live logs
-          </button>
-          <button
-            class="tab"
-            :class="{ active: detailTab === 'history' }"
-            @click="detailTab = 'history'"
-          >
-            History
-          </button>
-        </div>
-      </div>
-
-      <div v-if="detailTab === 'live'" class="logs">
-        <p v-if="!selected" class="empty">Select an engine to stream logs.</p>
-        <div v-else class="log-lines">
-          <p v-for="(line, idx) in logs" :key="idx">{{ line }}</p>
-        </div>
-      </div>
-
-      <div v-else class="history">
-        <div class="history-controls">
-          <label>
-            Show last
-            <select v-model.number="historyMinutes" @change="loadHistory">
-              <option :value="30">30 minutes</option>
-              <option :value="120">2 hours</option>
-              <option :value="360">6 hours</option>
-              <option :value="1440">24 hours</option>
-            </select>
-          </label>
-          <button class="secondary" @click="loadHistory" :disabled="!selected">
-            Load history
-          </button>
-        </div>
-        <div class="history-grid">
-          <div class="history-card">
-            <h3>Status history</h3>
-            <div class="history-list">
-              <p v-if="!statusHistory.length" class="empty">No status entries.</p>
-              <p v-for="(item, idx) in statusHistory" :key="idx">
-                [{{ item.ts }}] {{ item.status }} (PID {{ item.pid ?? "—" }})
-              </p>
-            </div>
+        <p class="panel-sub">
+          {{ selected ? `${selected.host.name} • ${selected.instance.id}` : "Pick an engine" }}
+        </p>
+        <div class="logs">
+          <p v-if="!selected" class="empty">Select an engine to stream logs.</p>
+          <div v-else class="log-lines">
+            <p v-for="(line, idx) in logs" :key="idx">{{ line }}</p>
           </div>
-          <div class="history-card">
-            <h3>Log history</h3>
-            <div class="history-list">
-              <p v-if="!logHistory.length" class="empty">No log entries.</p>
-              <p v-for="(item, idx) in logHistory" :key="idx">
-                [{{ item.ts }}] {{ item.stream }}: {{ item.line }}
-              </p>
+        </div>
+        <div class="history">
+          <div class="history-controls">
+            <label>
+              Show last
+              <select v-model.number="historyMinutes" @change="loadHistory">
+                <option :value="30">30 minutes</option>
+                <option :value="120">2 hours</option>
+                <option :value="360">6 hours</option>
+                <option :value="1440">24 hours</option>
+              </select>
+            </label>
+            <button class="secondary" @click="loadHistory" :disabled="!selected">
+              Load history
+            </button>
+          </div>
+          <div class="history-grid">
+            <div class="history-card">
+              <h3>Status history</h3>
+              <div class="history-list">
+                <p v-if="!statusHistory.length" class="empty">No status entries.</p>
+                <p v-for="(item, idx) in statusHistory" :key="idx">
+                  [{{ item.ts ?? "—" }}] {{ item.status }} (PID {{ item.pid ?? "—" }})
+                </p>
+              </div>
+            </div>
+            <div class="history-card">
+              <h3>Log history</h3>
+              <div class="history-list">
+                <p v-if="!logHistory.length" class="empty">No log entries.</p>
+                <p v-for="(item, idx) in logHistory" :key="idx">
+                  [{{ item.ts }}] {{ item.stream }}: {{ item.line }}
+                </p>
+              </div>
             </div>
           </div>
         </div>
       </div>
-    </section>
+    </div>
 
     <div v-if="showHostModal" class="modal-backdrop">
       <div class="modal">
@@ -459,11 +434,11 @@ const logs = ref<string[]>([]);
 const errors = ref<string[]>([]);
 const loading = ref(false);
 const lastRefreshed = ref<string | null>(null);
-const mainTab = ref<"engines" | "detail" | "admin">("engines");
-const detailTab = ref<"live" | "history">("live");
+const mainTab = ref<"engines" | "admin">("engines");
 const historyMinutes = ref(120);
 const statusHistory = ref<EngineInstance[]>([]);
 const logHistory = ref<LogEntry[]>([]);
+const showDetailModal = ref(false);
 const configHostId = ref<string | null>(null);
 const configs = ref<EngineConfig[]>([]);
 const configErrors = ref<string[]>([]);
@@ -595,14 +570,22 @@ async function stopEngine(engine: EngineItem) {
   await refreshAll();
 }
 
-// Selecting an engine updates detail views.
-function selectEngine(engine: EngineItem) {
+// Selecting an engine opens detail modal.
+function openDetailModal(engine: EngineItem) {
   selected.value = engine;
-  if (detailTab.value === "live") {
-    connectLogs();
-  }
-  if (detailTab.value === "history") {
-    loadHistory();
+  showDetailModal.value = true;
+  connectLogs();
+  loadHistory();
+}
+
+function closeDetailModal() {
+  showDetailModal.value = false;
+  logs.value = [];
+  statusHistory.value = [];
+  logHistory.value = [];
+  if (ws) {
+    ws.close();
+    ws = null;
   }
 }
 
