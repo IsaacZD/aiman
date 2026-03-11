@@ -412,14 +412,11 @@
           <p v-for="error in configErrors" :key="error">{{ error }}</p>
         </div>
         <form class="config-form" @submit.prevent="saveConfig">
-          <label>
-            Config ID
-            <input
-              v-model="configForm.id"
-              type="text"
-              placeholder="auto-generated"
-              readonly
-            />
+          <label class="config-id-label">
+            <span class="config-id-title">Config ID</span>
+            <span class="config-id-value">
+              {{ configForm.id || "auto-generated" }}
+            </span>
           </label>
           <label>
             Display name
@@ -443,16 +440,25 @@
               v-if="configForm.engine_type === 'Vllm'"
               v-model="vllmArgsForm"
               :model-options="vllmModelOptions"
+              :open-model-picker="
+                (onSelect) => openModelPicker(vllmModelOptions, 'Select vLLM model', onSelect)
+              "
             />
             <LlamaCppConfigFields
               v-else-if="configForm.engine_type === 'LlamaCpp'"
               v-model="llamaCppArgsForm"
               :model-options="ggufModelOptions"
+              :open-model-picker="
+                (onSelect) => openModelPicker(ggufModelOptions, 'Select GGUF model', onSelect)
+              "
             />
             <KTransformersConfigFields
               v-else-if="configForm.engine_type === 'KTransformers'"
               v-model="kTransformersArgsForm"
               :model-options="ggufModelOptions"
+              :open-model-picker="
+                (onSelect) => openModelPicker(ggufModelOptions, 'Select GGUF model', onSelect)
+              "
             />
             <CustomConfigFields v-else v-model="customArgsForm" />
           </div>
@@ -492,6 +498,52 @@
             </button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <div v-if="showModelPicker" class="modal-backdrop">
+      <div class="modal modal-wide model-picker-modal">
+        <div class="modal-head">
+          <h3>{{ modelPickerTitle }}</h3>
+          <button class="ghost" @click="closeModelPicker">Close</button>
+        </div>
+        <div class="model-picker-search">
+          <input
+            v-model="modelPickerQuery"
+            type="text"
+            placeholder="Search by name, path, kind, or library"
+          />
+        </div>
+        <p class="panel-sub">
+          {{
+            filteredModelPickerOptions.length
+              ? `${filteredModelPickerOptions.length} models available`
+              : modelPickerOptions.length
+                ? "No matches. Try another search."
+                : "No models found. Check the host model library paths."
+          }}
+        </p>
+        <div v-if="filteredModelPickerOptions.length" class="model-card-groups">
+          <section v-for="group in groupedModelPickerOptions" :key="group.library">
+            <div class="model-group-title">{{ group.library }}</div>
+            <div v-for="kindGroup in group.kinds" :key="kindGroup.kind" class="model-kind-group">
+              <div class="model-kind-title">{{ kindGroup.kind }}</div>
+              <div class="model-card-grid">
+                <button
+                  v-for="option in kindGroup.items"
+                  :key="option.path"
+                  class="model-card"
+                  type="button"
+                  @click="selectModelFromPicker(option.path)"
+                >
+                  <div class="model-card-title">{{ option.label }}</div>
+                  <div class="model-card-path">{{ option.path }}</div>
+                  <div class="model-card-meta">{{ option.kind }} • {{ option.library }}</div>
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
 
@@ -756,6 +808,11 @@ const llamaCppArgsForm = ref(createLlamaCppArgsForm());
 const kTransformersArgsForm = ref(createKTransformersArgsForm());
 const customArgsForm = ref(createCustomArgsForm());
 const showConfigModal = ref(false);
+const showModelPicker = ref(false);
+const modelPickerOptions = ref<ModelArtifact[]>([]);
+const modelPickerTitle = ref("Select model");
+const modelPickerOnSelect = ref<((path: string) => void) | null>(null);
+const modelPickerQuery = ref("");
 const hostErrors = ref<string[]>([]);
 const hostMode = ref<"create" | "edit">("create");
 const hostForm = ref(createEmptyHostForm());
@@ -780,6 +837,47 @@ const vllmModelOptions = computed(() =>
 const ggufModelOptions = computed(() =>
   modelArtifacts.value.filter((artifact) => artifact.kind === "gguf")
 );
+const filteredModelPickerOptions = computed(() => {
+  const query = modelPickerQuery.value.trim().toLowerCase();
+  if (!query) {
+    return modelPickerOptions.value;
+  }
+  return modelPickerOptions.value.filter((option) => {
+    return (
+      option.label.toLowerCase().includes(query) ||
+      option.path.toLowerCase().includes(query) ||
+      option.id.toLowerCase().includes(query) ||
+      option.library.toLowerCase().includes(query) ||
+      option.kind.toLowerCase().includes(query)
+    );
+  });
+});
+
+const groupedModelPickerOptions = computed(() => {
+  const grouped: Record<string, Record<string, ModelArtifact[]>> = {};
+  for (const option of filteredModelPickerOptions.value) {
+    const library = option.library || "Unknown library";
+    if (!grouped[library]) {
+      grouped[library] = {};
+    }
+    if (!grouped[library][option.kind]) {
+      grouped[library][option.kind] = [];
+    }
+    grouped[library][option.kind].push(option);
+  }
+  const sortedLibraries = Object.keys(grouped).sort((a, b) => a.localeCompare(b));
+  return sortedLibraries.map((library) => {
+    const kinds = grouped[library];
+    const sortedKinds = Object.keys(kinds).sort((a, b) => a.localeCompare(b));
+    return {
+      library,
+      kinds: sortedKinds.map((kind) => ({
+        kind,
+        items: kinds[kind].sort((a, b) => a.label.localeCompare(b.label))
+      }))
+    };
+  });
+});
 const engineCount = computed(() => engines.value.length);
 const enginesByHost = computed(() => {
   const grouped: Record<string, EngineItem[]> = {};
@@ -1460,6 +1558,29 @@ function openConfigModal(config?: EngineConfig) {
 function closeConfigModal() {
   showConfigModal.value = false;
   configErrors.value = [];
+  closeModelPicker();
+}
+
+function openModelPicker(
+  options: ModelArtifact[],
+  title: string,
+  onSelect: (path: string) => void
+) {
+  modelPickerOptions.value = options;
+  modelPickerTitle.value = title;
+  modelPickerOnSelect.value = onSelect;
+  modelPickerQuery.value = "";
+  showModelPicker.value = true;
+}
+
+function closeModelPicker() {
+  showModelPicker.value = false;
+  modelPickerOnSelect.value = null;
+}
+
+function selectModelFromPicker(path: string) {
+  modelPickerOnSelect.value?.(path);
+  closeModelPicker();
 }
 
 function editConfig(config: EngineConfig) {

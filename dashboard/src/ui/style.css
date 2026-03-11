@@ -533,6 +533,29 @@ h2 {
   cursor: default;
 }
 
+.config-id-label {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.config-id-title {
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.config-id-label .config-id-value {
+  padding: 2px 0;
+  border-radius: 0;
+  border-bottom: 1px dotted rgba(255, 255, 255, 0.25);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.88rem;
+  letter-spacing: 0.02em;
+}
+
 .config-form textarea {
   resize: vertical;
 }
@@ -570,6 +593,17 @@ h2 {
   font-size: 0.95rem;
   background: rgba(8, 12, 20, 0.9);
   color: var(--ink);
+}
+
+.model-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.model-picker-btn {
+  white-space: nowrap;
 }
 
 .config-inline {
@@ -677,6 +711,95 @@ h2 {
 
 .modal-head h3 {
   margin: 0;
+}
+
+.model-picker-modal {
+  max-height: min(78vh, 900px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.model-picker-search input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  font-family: inherit;
+  font-size: 0.95rem;
+  background: rgba(8, 12, 20, 0.9);
+  color: var(--ink);
+}
+
+.model-card-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.model-group-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+
+.model-kind-group {
+  margin-bottom: 12px;
+}
+
+.model-kind-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.model-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.model-card {
+  text-align: left;
+  background: rgba(8, 12, 20, 0.9);
+  border: 1px solid rgba(90, 115, 160, 0.25);
+  border-radius: 16px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--ink);
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.model-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(90, 163, 255, 0.5);
+}
+
+.model-card-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+.model-card-path {
+  font-size: 0.8rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.model-card-meta {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .host-grid {

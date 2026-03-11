@@ -2,17 +2,17 @@
   <div class="engine-fields">
     <label>
       Model path
-      <input
-        v-model="form.modelPath"
-        type="text"
-        placeholder="/models/qwen.gguf"
-        :list="modelListId"
-      />
-      <datalist v-if="modelOptions.length" :id="modelListId">
-        <option v-for="option in modelOptions" :key="option.path" :value="option.path">
-          {{ option.label }}
-        </option>
-      </datalist>
+      <div class="model-input-row">
+        <input v-model="form.modelPath" type="text" placeholder="/models/qwen.gguf" />
+        <button
+          class="ghost model-picker-btn"
+          type="button"
+          :disabled="!modelOptions.length"
+          @click="openPicker"
+        >
+          Browse
+        </button>
+      </div>
     </label>
     <label>
       Port (optional)
@@ -42,8 +42,16 @@ type ModelOption = {
   label: string;
 };
 
-const props = defineProps<{ modelOptions?: ModelOption[] }>();
+const props = defineProps<{
+  modelOptions?: ModelOption[];
+  openModelPicker?: (onSelect: (path: string) => void) => void;
+}>();
 const form = defineModel<LlamaCppArgsForm>({ required: true });
-const modelListId = "llama-cpp-models";
 const modelOptions = computed(() => props.modelOptions ?? []);
+
+function openPicker() {
+  props.openModelPicker?.((path) => {
+    form.value.modelPath = path;
+  });
+}
 </script>

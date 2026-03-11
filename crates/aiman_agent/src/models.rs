@@ -64,12 +64,65 @@ fn scan_library(path: &Path, artifacts: &mut Vec<ModelArtifact>) {
             None => continue,
         };
         if !name.starts_with("models--") {
+            if is_model_dir(&entry_path) {
+                let model_id = name.to_string();
+                scan_model_dir_direct(
+                    &entry_path,
+                    &model_id,
+                    &library_label,
+                    &library_hint,
+                    artifacts,
+                );
+                continue;
+            }
+            scan_org_dir(
+                &entry_path,
+                name,
+                &library_label,
+                &library_hint,
+                artifacts,
+            );
             continue;
         }
         let model_id = name
             .trim_start_matches("models--")
             .replace("--", "/");
         scan_model_dir(&entry_path, &model_id, &library_label, &library_hint, artifacts);
+    }
+}
+
+fn scan_org_dir(
+    path: &Path,
+    org: &str,
+    library_label: &str,
+    library_hint: &str,
+    artifacts: &mut Vec<ModelArtifact>,
+) {
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let entry_path = entry.path();
+        if !entry_path.is_dir() {
+            continue;
+        }
+        let model_name = match entry_path.file_name().and_then(|name| name.to_str()) {
+            Some(name) => name,
+            None => continue,
+        };
+        if !is_model_dir(&entry_path) {
+            continue;
+        }
+        let model_id = format!("{org}/{model_name}");
+        scan_model_dir_direct(
+            &entry_path,
+            &model_id,
+            library_label,
+            library_hint,
+            artifacts,
+        );
     }
 }
 
@@ -112,6 +165,71 @@ fn scan_model_dir(
             0,
         );
     }
+}
+
+fn scan_model_dir_direct(
+    path: &Path,
+    model_id: &str,
+    library_label: &str,
+    library_hint: &str,
+    artifacts: &mut Vec<ModelArtifact>,
+) {
+    let model_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("model");
+    artifacts.push(ModelArtifact {
+        id: model_id.to_string(),
+        kind: "snapshot".to_string(),
+        path: path.display().to_string(),
+        label: format!("{model_id} • {model_name} @ {library_hint}"),
+        library: library_label.to_string(),
+    });
+    collect_gguf_files(
+        path,
+        model_id,
+        library_label,
+        library_hint,
+        artifacts,
+        0,
+    );
+}
+
+fn is_model_dir(path: &Path) -> bool {
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(_) => return false,
+    };
+    for entry in entries.flatten() {
+        let entry_path = entry.path();
+        if entry_path.is_dir() {
+            continue;
+        }
+        let filename = match entry_path.file_name().and_then(|name| name.to_str()) {
+            Some(name) => name,
+            None => continue,
+        };
+        if filename.eq_ignore_ascii_case("config.json")
+            || filename.eq_ignore_ascii_case("model.safetensors.index.json")
+            || filename.eq_ignore_ascii_case("tokenizer.json")
+            || filename.eq_ignore_ascii_case("tokenizer_config.json")
+        {
+            return true;
+        }
+        if entry_path
+            .extension()
+            .and_then(OsStr::to_str)
+            .map(|ext| {
+                ext.eq_ignore_ascii_case("safetensors")
+                    || ext.eq_ignore_ascii_case("gguf")
+                    || ext.eq_ignore_ascii_case("bin")
+            })
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn collect_gguf_files(
