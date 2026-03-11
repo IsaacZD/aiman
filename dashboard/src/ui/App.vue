@@ -20,6 +20,13 @@
       <button class="tab" :class="{ active: mainTab === 'engines' }" @click="mainTab = 'engines'">
         Engines
       </button>
+      <button
+        class="tab"
+        :class="{ active: mainTab === 'benchmarks' }"
+        @click="mainTab = 'benchmarks'"
+      >
+        Benchmarks
+      </button>
       <button class="tab" :class="{ active: mainTab === 'admin' }" @click="mainTab = 'admin'">
         Admin
       </button>
@@ -117,6 +124,13 @@
               <div class="engine-actions">
                 <button class="secondary" @click.stop="startEngine(engine)">Start</button>
                 <button class="ghost" @click.stop="stopEngine(engine)">Stop</button>
+                <button
+                  class="secondary"
+                  :disabled="engine.instance.status !== 'Running'"
+                  @click.stop="openBenchmarkModal(engine)"
+                >
+                  Benchmark
+                </button>
               </div>
             </article>
           </div>
@@ -125,6 +139,93 @@
           </p>
         </section>
         <p v-if="!hosts.length" class="empty">No hosts yet.</p>
+      </div>
+    </section>
+
+    <section v-if="mainTab === 'benchmarks'" class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>Benchmarks</h2>
+          <p class="panel-sub">
+            Historical runs across hosts. Each entry stores a full config snapshot.
+          </p>
+        </div>
+        <div class="panel-actions">
+          <button class="secondary" @click="loadBenchmarks" :disabled="benchmarkLoading">
+            {{ benchmarkLoading ? "Refreshing..." : "Refresh" }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="benchmarkErrors.length" class="alert">
+        <p v-for="error in benchmarkErrors" :key="error">{{ error }}</p>
+      </div>
+
+      <div class="benchmark-list">
+        <article v-for="record in benchmarkRecords" :key="record.id" class="benchmark-card">
+          <div class="benchmark-head">
+            <div>
+              <h3>{{ record.engine_config.name }}</h3>
+              <p class="benchmark-meta">
+                {{ record.host?.name ?? "Unknown host" }} •
+                {{ record.engine_config.engine_type }}
+              </p>
+              <p class="benchmark-meta">Run {{ formatBenchmarkTime(record.ts) }}</p>
+            </div>
+            <div class="benchmark-tags">
+              <span class="pill">Model {{ record.settings.model }}</span>
+              <span class="pill">Max tokens {{ record.settings.max_tokens }}</span>
+              <span class="pill">Prompt {{ record.settings.prompt_words }} words</span>
+            </div>
+          </div>
+
+          <div class="benchmark-details">
+            <div>
+              <p class="benchmark-label">Prompt</p>
+              <p class="benchmark-value">
+                {{ truncatePrompt(record.settings.prompt) }}
+              </p>
+            </div>
+            <div>
+              <p class="benchmark-label">Host hardware</p>
+              <p class="benchmark-value">
+                {{ formatCpu(record.host_hardware) }} •
+                {{ formatMemory(record.host_hardware) }} •
+                {{ formatGpus(record.host_hardware) }}
+              </p>
+            </div>
+          </div>
+
+          <div class="benchmark-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Concurrency</th>
+                  <th>Requests</th>
+                  <th>Success</th>
+                  <th>Avg latency</th>
+                  <th>P90 latency</th>
+                  <th>Prompt tps</th>
+                  <th>Completion tps</th>
+                  <th>Req/s</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="result in record.results" :key="result.concurrency">
+                  <td>{{ result.concurrency }}</td>
+                  <td>{{ result.requests }}</td>
+                  <td>{{ result.success_count }}</td>
+                  <td>{{ formatMs(result.avg_latency_ms) }}</td>
+                  <td>{{ formatMs(result.p90_latency_ms) }}</td>
+                  <td>{{ formatRate(result.prompt_tps) }}</td>
+                  <td>{{ formatRate(result.completion_tps) }}</td>
+                  <td>{{ formatRate(result.requests_per_sec) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+        <p v-if="!benchmarkRecords.length" class="empty">No benchmarks yet.</p>
       </div>
     </section>
 
@@ -392,6 +493,69 @@
         </form>
       </div>
     </div>
+
+    <div v-if="showBenchmarkModal" class="modal-backdrop">
+      <div class="modal modal-wide">
+        <div class="modal-head">
+          <h3>Run benchmark</h3>
+          <button class="ghost" @click="closeBenchmarkModal">Close</button>
+        </div>
+        <p class="panel-sub">
+          {{ benchmarkTarget ? `${benchmarkTarget.host.name} • ${benchmarkTarget.configName ?? benchmarkTarget.instance.id}` : "Pick an engine" }}
+        </p>
+        <div v-if="benchmarkModalError" class="alert">
+          {{ benchmarkModalError }}
+        </div>
+        <form class="config-form" @submit.prevent="runBenchmark">
+          <label>
+            Parallelism (comma separated)
+            <input v-model="benchmarkForm.concurrencyText" type="text" placeholder="1,2,4,8" />
+          </label>
+          <label>
+            Requests per concurrency
+            <input v-model.number="benchmarkForm.requestsPerConcurrency" type="number" min="1" />
+          </label>
+          <label>
+            Max tokens
+            <input v-model.number="benchmarkForm.maxTokens" type="number" min="1" />
+          </label>
+          <label>
+            Temperature
+            <input v-model.number="benchmarkForm.temperature" type="number" min="0" max="2" step="0.1" />
+          </label>
+          <label>
+            Model override (optional)
+            <input v-model="benchmarkForm.model" type="text" placeholder="leave blank for auto" />
+          </label>
+          <label>
+            Prompt words
+            <input v-model.number="benchmarkForm.promptWords" type="number" min="1" />
+          </label>
+          <label>
+            Custom prompt (optional)
+            <textarea v-model="benchmarkForm.prompt" rows="3" placeholder="leave blank to auto-generate"></textarea>
+          </label>
+          <label>
+            API base URL override (optional)
+            <input v-model="benchmarkForm.apiBaseUrl" type="text" placeholder="http://127.0.0.1:8000" />
+          </label>
+          <label>
+            API key (optional, not stored)
+            <input v-model="benchmarkForm.apiKey" type="password" placeholder="engine API key" />
+          </label>
+          <label>
+            Timeout (seconds)
+            <input v-model.number="benchmarkForm.timeoutSeconds" type="number" min="10" />
+          </label>
+          <div class="form-actions">
+            <button class="ghost" type="button" @click="closeBenchmarkModal">Cancel</button>
+            <button class="primary" type="submit" :disabled="benchmarkRunning || !benchmarkTarget">
+              {{ benchmarkRunning ? "Running..." : "Run benchmark" }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   </main>
 </template>
 
@@ -506,6 +670,55 @@ type HardwareInfo = {
   }[];
 };
 
+type BenchmarkHostSnapshot = {
+  id: string;
+  name: string;
+  base_url: string;
+};
+
+type BenchmarkSettings = {
+  concurrency: number[];
+  requests_per_concurrency: number;
+  prompt: string;
+  prompt_words: number;
+  max_tokens: number;
+  temperature: number;
+  model: string;
+  api_base_url: string;
+  timeout_seconds: number;
+};
+
+type BenchmarkResult = {
+  concurrency: number;
+  requests: number;
+  success_count: number;
+  error_count: number;
+  duration_ms: number;
+  avg_latency_ms: number;
+  min_latency_ms: number;
+  max_latency_ms: number;
+  p50_latency_ms: number;
+  p90_latency_ms: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  prompt_tps: number;
+  completion_tps: number;
+  requests_per_sec: number;
+  errors: string[];
+};
+
+type BenchmarkRecord = {
+  id: string;
+  ts: string;
+  host?: BenchmarkHostSnapshot | null;
+  host_hardware?: HardwareInfo | null;
+  engine_config: EngineConfig;
+  engine_status: string;
+  settings: BenchmarkSettings;
+  results: BenchmarkResult[];
+};
+
 // High-level UI state.
 const hosts = ref<Host[]>([]);
 const engines = ref<EngineItem[]>([]);
@@ -514,7 +727,7 @@ const logs = ref<string[]>([]);
 const errors = ref<string[]>([]);
 const loading = ref(false);
 const lastRefreshed = ref<string | null>(null);
-const mainTab = ref<"engines" | "admin">("engines");
+const mainTab = ref<"engines" | "benchmarks" | "admin">("engines");
 const historyMinutes = ref(120);
 const statusHistory = ref<EngineInstance[]>([]);
 const logHistory = ref<LogEntry[]>([]);
@@ -539,6 +752,14 @@ const hostMode = ref<"create" | "edit">("create");
 const hostForm = ref(createEmptyHostForm());
 const showHostModal = ref(false);
 const modelArtifacts = ref<ModelArtifact[]>([]);
+const benchmarkRecords = ref<BenchmarkRecord[]>([]);
+const benchmarkErrors = ref<string[]>([]);
+const benchmarkLoading = ref(false);
+const showBenchmarkModal = ref(false);
+const benchmarkTarget = ref<EngineItem | null>(null);
+const benchmarkForm = ref(createBenchmarkForm());
+const benchmarkModalError = ref<string | null>(null);
+const benchmarkRunning = ref(false);
 
 const selectedHost = computed(() =>
   hosts.value.find((host) => host.id === configHostId.value) ?? null
@@ -589,6 +810,15 @@ watch(
       configForm.value.command = nextDefault;
     }
     lastEngineType.value = next;
+  }
+);
+
+watch(
+  () => mainTab.value,
+  (next) => {
+    if (next === "benchmarks") {
+      loadBenchmarks();
+    }
   }
 );
 
@@ -688,6 +918,9 @@ async function refreshAll() {
       configHostId.value = hosts.value[0].id;
     }
     await loadConfigs();
+    if (mainTab.value === "benchmarks") {
+      await loadBenchmarks();
+    }
   } finally {
     loading.value = false;
   }
@@ -897,6 +1130,44 @@ function formatDuration(totalSeconds: number | null | undefined) {
   return parts.join(" ");
 }
 
+function formatBenchmarkTime(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
+}
+
+function formatMs(value: number) {
+  if (!value) {
+    return "—";
+  }
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(2)}s`;
+  }
+  return `${value}ms`;
+}
+
+function formatRate(value: number) {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  if (value >= 100) {
+    return `${Math.round(value)}`;
+  }
+  return value.toFixed(1);
+}
+
+function truncatePrompt(prompt: string, maxLength = 160) {
+  if (!prompt) {
+    return "—";
+  }
+  if (prompt.length <= maxLength) {
+    return prompt;
+  }
+  return `${prompt.slice(0, maxLength)}...`;
+}
+
 function formatBytesFromKb(value: number | null | undefined) {
   if (value === null || value === undefined) {
     return null;
@@ -943,6 +1214,21 @@ function createEmptyConfigForm() {
     auto_restart_enabled: false,
     auto_restart_max_retries: 0,
     auto_restart_backoff_secs: 5
+  };
+}
+
+function createBenchmarkForm() {
+  return {
+    concurrencyText: "1,2,4,8",
+    requestsPerConcurrency: 8,
+    maxTokens: 256,
+    temperature: 0.2,
+    model: "",
+    promptWords: 120,
+    prompt: "",
+    apiBaseUrl: "",
+    apiKey: "",
+    timeoutSeconds: 90
   };
 }
 
@@ -1125,6 +1411,19 @@ function resetConfigForm() {
   llamaCppArgsForm.value = createLlamaCppArgsForm();
   kTransformersArgsForm.value = createKTransformersArgsForm();
   customArgsForm.value = createCustomArgsForm();
+}
+
+function openBenchmarkModal(engine: EngineItem) {
+  benchmarkTarget.value = engine;
+  benchmarkForm.value = createBenchmarkForm();
+  benchmarkModalError.value = null;
+  showBenchmarkModal.value = true;
+}
+
+function closeBenchmarkModal() {
+  showBenchmarkModal.value = false;
+  benchmarkModalError.value = null;
+  benchmarkRunning.value = false;
 }
 
 function openConfigModal(config?: EngineConfig) {
@@ -1362,6 +1661,98 @@ function parseEnvLines(raw: string, errors: string[]) {
   }
 
   return entries;
+}
+
+function parseConcurrency(input: string) {
+  return input
+    .split(",")
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isFinite(value) && value > 0);
+}
+
+async function runBenchmark() {
+  if (!benchmarkTarget.value) {
+    return;
+  }
+  benchmarkModalError.value = null;
+  const concurrency = parseConcurrency(benchmarkForm.value.concurrencyText);
+  if (!concurrency.length) {
+    benchmarkModalError.value = "Parallelism must include at least one number.";
+    return;
+  }
+
+  const settings = {
+    concurrency,
+    requests_per_concurrency: benchmarkForm.value.requestsPerConcurrency,
+    max_tokens: benchmarkForm.value.maxTokens,
+    temperature: benchmarkForm.value.temperature,
+    model: benchmarkForm.value.model.trim() || undefined,
+    prompt_words: benchmarkForm.value.promptWords,
+    prompt: benchmarkForm.value.prompt.trim() || undefined,
+    api_base_url: benchmarkForm.value.apiBaseUrl.trim() || undefined,
+    api_key: benchmarkForm.value.apiKey.trim() || undefined,
+    timeout_seconds: benchmarkForm.value.timeoutSeconds
+  };
+
+  benchmarkRunning.value = true;
+  try {
+    const res = await fetch(
+      `/api/hosts/${benchmarkTarget.value.host.id}/engines/${benchmarkTarget.value.instance.id}/benchmark`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings })
+      }
+    );
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      benchmarkModalError.value = body?.error
+        ? `Benchmark failed: ${body.error}`
+        : `Benchmark failed (HTTP ${res.status}).`;
+      return;
+    }
+    closeBenchmarkModal();
+    await loadBenchmarks();
+  } catch (err) {
+    benchmarkModalError.value = (err as Error).message;
+  } finally {
+    benchmarkRunning.value = false;
+  }
+}
+
+async function loadBenchmarks() {
+  benchmarkLoading.value = true;
+  benchmarkErrors.value = [];
+  try {
+    const res = await fetch("/api/benchmarks");
+    if (!res.ok) {
+      benchmarkErrors.value = [`Failed to load benchmarks (HTTP ${res.status})`];
+      benchmarkRecords.value = [];
+      return;
+    }
+    const body = (await res.json()) as {
+      results: { host: Host; records?: BenchmarkRecord[]; error?: string }[];
+    };
+    const next: BenchmarkRecord[] = [];
+    const errors: string[] = [];
+    for (const result of body.results ?? []) {
+      if (result.error) {
+        errors.push(`${result.host.name}: ${result.error}`);
+        continue;
+      }
+      for (const record of result.records ?? []) {
+        next.push(record);
+      }
+    }
+    next.sort((a, b) => (a.ts < b.ts ? 1 : -1));
+    benchmarkRecords.value = next;
+    benchmarkErrors.value = errors;
+  } catch (err) {
+    benchmarkErrors.value = [(err as Error).message];
+    benchmarkRecords.value = [];
+  } finally {
+    benchmarkLoading.value = false;
+  }
 }
 
 // Initial load and cleanup.

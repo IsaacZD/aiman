@@ -33,7 +33,7 @@ pub enum EngineType {
 }
 
 /// Runtime status of an engine instance.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EngineStatus {
     Starting,
     Running,

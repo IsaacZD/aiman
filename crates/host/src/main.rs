@@ -1,5 +1,7 @@
 mod api;
 mod auth;
+mod benchmark;
+mod hardware;
 mod models;
 mod state;
 mod supervisor;
@@ -11,9 +13,9 @@ use axum::{middleware, routing::get, routing::post, routing::put, Router};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::api::{
-    create_config, delete_config, engine_logs, engine_logs_ws, engine_status_history, get_engine,
-    hardware_info, health, list_configs, list_engines, scan_models, start_engine, stop_engine,
-    update_config,
+    benchmark_engine, create_config, delete_config, engine_logs, engine_logs_ws,
+    engine_status_history, get_engine, hardware_info, health, list_benchmarks, list_configs,
+    list_engines, scan_models, start_engine, stop_engine, update_config,
 };
 use crate::auth::auth_middleware;
 use crate::state::AppState;
@@ -74,6 +76,8 @@ async fn main() {
         .route("/v1/engines/{id}/logs", get(engine_logs))
         .route("/v1/engines/{id}/logs/ws", get(engine_logs_ws))
         .route("/v1/engines/{id}/status", get(engine_status_history))
+        .route("/v1/engines/{id}/benchmark", post(benchmark_engine))
+        .route("/v1/benchmarks", get(list_benchmarks))
         .route("/v1/models/scan", post(scan_models))
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state.clone());

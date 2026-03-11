@@ -52,6 +52,8 @@ pub struct Supervisor {
     data_dir: PathBuf,
     configs: Arc<RwLock<HashMap<String, EngineConfig>>>,
     handles: Arc<RwLock<HashMap<String, Arc<EngineHandle>>>>,
+    benchmark_path: PathBuf,
+    benchmark_write_lock: Arc<Mutex<()>>,
 }
 
 impl Supervisor {
@@ -77,6 +79,7 @@ impl Supervisor {
         tracing::info!(count = configs_vec.len(), "loaded engine configs");
         let mut configs = HashMap::new();
         let mut handles = HashMap::new();
+        let benchmark_path = data_dir.join("benchmarks.jsonl");
 
         for config in configs_vec {
             let id = config.id.clone();
@@ -97,6 +100,8 @@ impl Supervisor {
             data_dir,
             configs: Arc::new(RwLock::new(configs)),
             handles: Arc::new(RwLock::new(handles)),
+            benchmark_path,
+            benchmark_write_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -126,6 +131,11 @@ impl Supervisor {
         let mut values: Vec<_> = configs.values().cloned().collect();
         values.sort_by(|a, b| a.id.cmp(&b.id));
         values
+    }
+
+    pub async fn get_config(&self, id: &str) -> Option<EngineConfig> {
+        let configs = self.configs.read().await;
+        configs.get(id).cloned()
     }
 
     pub async fn add_config(&self, config: EngineConfig) -> Result<EngineConfig, SupervisorError> {
@@ -215,6 +225,14 @@ impl Supervisor {
         handle.stop().await?;
         let instance = handle.instance.read().await.clone();
         Ok(instance)
+    }
+
+    pub fn benchmark_path(&self) -> &PathBuf {
+        &self.benchmark_path
+    }
+
+    pub async fn append_benchmark<T: Serialize>(&self, record: &T) {
+        append_jsonl(&self.benchmark_path, &self.benchmark_write_lock, record).await;
     }
 }
 

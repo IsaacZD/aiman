@@ -261,6 +261,37 @@ server.post("/api/hosts/:hostId/engines/:engineId/stop", async (request, reply) 
   return reply.code(res.status).send(body ?? { ok: res.ok });
 });
 
+// Proxy benchmark run to the selected host.
+server.post("/api/hosts/:hostId/engines/:engineId/benchmark", async (request, reply) => {
+  const { hostId, engineId } = request.params as { hostId: string; engineId: string };
+  const host = await findHost(hostId);
+  if (!host) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+
+  const payload = request.body as Record<string, unknown> | null;
+  const settings = payload && "settings" in payload ? (payload as { settings: unknown }).settings : payload;
+  const requestBody = {
+    settings: settings ?? {},
+    host: {
+      id: host.id,
+      name: host.name,
+      base_url: host.base_url
+    }
+  };
+
+  const res = await fetch(`${host.base_url}/v1/engines/${engineId}/benchmark`, {
+    method: "POST",
+    headers: {
+      ...(host.api_key ? { Authorization: `Bearer ${host.api_key}` } : {}),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(requestBody)
+  });
+  const body = await safeJson(res);
+  return reply.code(res.status).send(body ?? { ok: res.ok });
+});
+
 // Proxy engine log history to the selected host.
 server.get("/api/hosts/:hostId/engines/:engineId/logs", async (request, reply) => {
   const { hostId, engineId } = request.params as { hostId: string; engineId: string };
@@ -315,6 +346,29 @@ server.get("/api/hosts/:hostId/engines/:engineId/status", async (request, reply)
   });
   const body = await safeJson(res);
   return reply.code(res.status).send(body ?? { ok: res.ok });
+});
+
+// Aggregate benchmark records across all configured hosts.
+server.get("/api/benchmarks", async () => {
+  const hosts = await loadHosts();
+  const results = await Promise.all(
+    hosts.map(async (host) => {
+      try {
+        const res = await fetch(`${host.base_url}/v1/benchmarks`, {
+          headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
+        });
+        if (!res.ok) {
+          return { host, error: `HTTP ${res.status}` };
+        }
+        const body = (await res.json()) as { records?: unknown[] };
+        return { host, records: body.records ?? [] };
+      } catch (err) {
+        return { host, error: (err as Error).message };
+      }
+    })
+  );
+
+  return { results };
 });
 
 // Bridge WS log stream from host -> browser.
