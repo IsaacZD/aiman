@@ -5,7 +5,9 @@ use std::{
     time::Duration,
 };
 
-use aiman_shared::{AutoRestart, EngineConfig, EngineInstance, EngineStatus, LogEntry, LogStream};
+use aiman_shared::{
+    AutoRestart, EngineConfig, EngineInstance, EngineStatus, EngineType, LogEntry, LogStream,
+};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -432,21 +434,38 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
         match spawn_process(&handle.config).await {
             Ok(mut child) => {
                 let pid = child.id();
+                let wait_for_ready = matches!(
+                    handle.config.engine_type,
+                    EngineType::Vllm | EngineType::Lvllm
+                );
+                let ready_marker = if wait_for_ready {
+                    Some("Application startup complete.".to_string())
+                } else {
+                    None
+                };
+                let (ready_tx, mut ready_rx) = watch::channel(false);
                 tracing::info!(
                     engine_id = %handle.config.id,
                     pid = pid,
                     "engine process spawned"
                 );
-                set_status(&handle, EngineStatus::Running, pid, Some(now())).await;
+                if wait_for_ready {
+                    set_status(&handle, EngineStatus::Starting, pid, None).await;
+                } else {
+                    set_status(&handle, EngineStatus::Running, pid, Some(now())).await;
+                }
 
                 let mut stdout_task = None;
                 let mut stderr_task = None;
+                let ready_tx = if wait_for_ready { Some(ready_tx) } else { None };
 
                 if let Some(stdout) = child.stdout.take() {
                     stdout_task = Some(tokio::spawn(stream_logs(
                         handle.clone(),
                         BufReader::new(stdout),
                         LogStream::Stdout,
+                        ready_tx.clone(),
+                        ready_marker.clone(),
                     )));
                 }
                 if let Some(stderr) = child.stderr.take() {
@@ -454,31 +473,77 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
                         handle.clone(),
                         BufReader::new(stderr),
                         LogStream::Stderr,
+                        ready_tx.clone(),
+                        ready_marker.clone(),
                     )));
                 }
 
-                tokio::select! {
-                    _ = stop_rx.changed() => {
-                        if *stop_rx.borrow() {
+                let mut should_monitor = true;
+                if wait_for_ready {
+                    let wait_for_ready = async {
+                        loop {
+                            if *ready_rx.borrow() {
+                                break;
+                            }
+                            if ready_rx.changed().await.is_err() {
+                                break;
+                            }
+                        }
+                    };
+
+                    tokio::select! {
+                        _ = wait_for_ready => {
+                            set_status(&handle, EngineStatus::Running, pid, Some(now())).await;
+                        }
+                        _ = stop_rx.changed() => {
+                            if *stop_rx.borrow() {
+                                tracing::info!(
+                                    engine_id = %handle.config.id,
+                                    pid = pid,
+                                    "stop signal received; terminating engine process"
+                                );
+                                terminate_process_tree(&mut child).await;
+                                set_status(&handle, EngineStatus::Stopped, None, None).await;
+                                should_monitor = false;
+                            }
+                        }
+                        status = child.wait() => {
+                            let code = status.ok().and_then(|s| s.code());
                             tracing::info!(
                                 engine_id = %handle.config.id,
                                 pid = pid,
-                                "stop signal received; terminating engine process"
+                                exit_code = code,
+                                "engine process exited"
                             );
-                            terminate_process_tree(&mut child).await;
-                            set_status(&handle, EngineStatus::Stopped, None, None).await;
-                            break;
+                            set_exit_status(&handle, code).await;
+                            should_monitor = false;
                         }
                     }
-                    status = child.wait() => {
-                        let code = status.ok().and_then(|s| s.code());
-                        tracing::info!(
-                            engine_id = %handle.config.id,
-                            pid = pid,
-                            exit_code = code,
-                            "engine process exited"
-                        );
-                        set_exit_status(&handle, code).await;
+                }
+
+                if should_monitor {
+                    tokio::select! {
+                        _ = stop_rx.changed() => {
+                            if *stop_rx.borrow() {
+                                tracing::info!(
+                                    engine_id = %handle.config.id,
+                                    pid = pid,
+                                    "stop signal received; terminating engine process"
+                                );
+                                terminate_process_tree(&mut child).await;
+                                set_status(&handle, EngineStatus::Stopped, None, None).await;
+                            }
+                        }
+                        status = child.wait() => {
+                            let code = status.ok().and_then(|s| s.code());
+                            tracing::info!(
+                                engine_id = %handle.config.id,
+                                pid = pid,
+                                exit_code = code,
+                                "engine process exited"
+                            );
+                            set_exit_status(&handle, code).await;
+                        }
                     }
                 }
 
@@ -643,9 +708,16 @@ async fn stream_logs<R: tokio::io::AsyncRead + Unpin>(
     handle: Arc<EngineTaskHandle>,
     reader: BufReader<R>,
     stream: LogStream,
+    ready_tx: Option<watch::Sender<bool>>,
+    ready_marker: Option<String>,
 ) {
     let mut lines = reader.lines();
     while let Ok(Some(line)) = lines.next_line().await {
+        if let (Some(tx), Some(marker)) = (&ready_tx, &ready_marker) {
+            if line.contains(marker) {
+                let _ = tx.send(true);
+            }
+        }
         let entry = LogEntry {
             ts: now(),
             stream: stream.clone(),
