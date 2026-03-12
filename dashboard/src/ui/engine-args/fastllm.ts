@@ -3,14 +3,14 @@ import { buildArgs, consumeFlag } from "./shared";
 export type FastllmArgsForm = {
   modelPath: string;
   port: string;
-  extraArgsText: string;
+  extraArgs: string[];
 };
 
 export function createFastllmArgsForm(): FastllmArgsForm {
   return {
     modelPath: "",
     port: "",
-    extraArgsText: ""
+    extraArgs: []
   };
 }
 
@@ -34,7 +34,7 @@ export function parseFastllmArgs(args: string[]): FastllmArgsForm {
   return {
     modelPath,
     port: port.value,
-    extraArgsText: rest.join("\n")
+    extraArgs: rest
   };
 }
 
@@ -47,5 +47,5 @@ export function buildFastllmArgs(form: FastllmArgsForm) {
     base.push("--port", form.port.trim());
   }
 
-  return buildArgs(base, form.extraArgsText);
+  return buildArgs(base, form.extraArgs);
 }

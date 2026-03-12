@@ -4,7 +4,7 @@ export type VllmArgsForm = {
   modelPath: string;
   port: string;
   tensorParallelSize: string;
-  extraArgsText: string;
+  extraArgs: string[];
 };
 
 export function createVllmArgsForm(): VllmArgsForm {
@@ -12,7 +12,7 @@ export function createVllmArgsForm(): VllmArgsForm {
     modelPath: "",
     port: "",
     tensorParallelSize: "",
-    extraArgsText: ""
+    extraArgs: []
   };
 }
 
@@ -29,7 +29,7 @@ export function parseVllmArgs(args: string[]): VllmArgsForm {
     modelPath: model.value,
     port: port.value,
     tensorParallelSize: tps.value,
-    extraArgsText: rest.join("\n")
+    extraArgs: rest
   };
 }
 
@@ -45,5 +45,5 @@ export function buildVllmArgs(form: VllmArgsForm) {
     base.push("--tensor-parallel-size", form.tensorParallelSize.trim());
   }
 
-  return buildArgs(base, form.extraArgsText);
+  return buildArgs(base, form.extraArgs);
 }

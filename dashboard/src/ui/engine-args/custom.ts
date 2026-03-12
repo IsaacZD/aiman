@@ -1,17 +1,20 @@
-import { parseArgsLines } from "./shared";
+import { splitArgsLine } from "./shared";
 
 export type CustomArgsForm = {
-  argsText: string;
+  args: string[];
 };
 
 export function createCustomArgsForm(): CustomArgsForm {
-  return { argsText: "" };
+  return { args: [] };
 }
 
 export function parseCustomArgs(args: string[]): CustomArgsForm {
-  return { argsText: args.join("\n") };
+  return { args: [...args] };
 }
 
 export function buildCustomArgs(form: CustomArgsForm) {
-  return parseArgsLines(form.argsText);
+  return form.args
+    .map((arg) => arg.trim())
+    .filter(Boolean)
+    .flatMap((arg) => splitArgsLine(arg));
 }

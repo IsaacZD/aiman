@@ -502,6 +502,9 @@ h2 {
   flex-direction: column;
   gap: 12px;
   box-shadow: 0 12px 20px rgba(15, 15, 15, 0.08);
+  max-height: calc(92vh - 120px);
+  overflow-y: auto;
+  padding-right: 6px;
 }
 
 .config-form h3 {
@@ -558,6 +561,31 @@ h2 {
 
 .config-form textarea {
   resize: vertical;
+}
+
+.list-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.list-editor-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.env-editor-row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+
+.list-editor-add {
+  align-self: flex-start;
+}
+
+.list-editor-remove {
+  white-space: nowrap;
 }
 
 .engine-fields-panel {
@@ -696,6 +724,8 @@ h2 {
   padding: 20px;
   box-shadow: var(--shadow);
   border: 1px solid rgba(90, 115, 160, 0.25);
+  max-height: 92vh;
+  overflow: hidden;
 }
 
 .modal-wide {

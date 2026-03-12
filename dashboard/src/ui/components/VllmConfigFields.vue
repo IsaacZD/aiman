@@ -23,8 +23,12 @@
       <input v-model="form.tensorParallelSize" type="text" placeholder="2" />
     </label>
     <label>
-      Additional args (one per line)
-      <textarea v-model="form.extraArgsText" rows="4" placeholder="--max-model-len\n4096"></textarea>
+      Additional args
+      <ArgumentListEditor
+        v-model="form.extraArgs"
+        add-label="Add argument"
+        placeholder="--max-model-len 4096"
+      />
     </label>
   </div>
 </template>
@@ -32,6 +36,7 @@
 <script setup lang="ts">
 import { computed, defineModel } from "vue";
 import type { VllmArgsForm } from "../engine-args/vllm";
+import ArgumentListEditor from "./ArgumentListEditor.vue";
 
 type ModelOption = {
   path: string;

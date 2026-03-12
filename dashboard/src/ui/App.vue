@@ -319,14 +319,14 @@
           <div class="history-controls">
             <label>
               Show last
-              <select v-model.number="historyMinutes" @change="loadHistory">
+              <select v-model.number="historyMinutes" @change="scheduleHistoryLoad">
                 <option :value="30">30 minutes</option>
                 <option :value="120">2 hours</option>
                 <option :value="360">6 hours</option>
                 <option :value="1440">24 hours</option>
               </select>
             </label>
-            <button class="secondary" @click="loadHistory" :disabled="!selected">
+            <button class="secondary" @click="scheduleHistoryLoad" :disabled="!selected">
               Load history
             </button>
           </div>
@@ -478,8 +478,8 @@
             <CustomConfigFields v-else v-model="customArgsForm" />
           </div>
           <label>
-            Env (KEY=VALUE per line)
-            <textarea v-model="configForm.envText" rows="4" placeholder="HF_HOME=/data/hf"></textarea>
+            Environment variables
+            <EnvVarListEditor v-model="configForm.envEntries" />
           </label>
           <label>
             Working dir
@@ -641,6 +641,7 @@ import LlamaCppConfigFields from "./components/LlamaCppConfigFields.vue";
 import FastllmConfigFields from "./components/FastllmConfigFields.vue";
 import KTransformersConfigFields from "./components/KTransformersConfigFields.vue";
 import CustomConfigFields from "./components/CustomConfigFields.vue";
+import EnvVarListEditor from "./components/EnvVarListEditor.vue";
 import {
   buildVllmArgs,
   createVllmArgsForm,
@@ -1090,7 +1091,7 @@ function openDetailModal(engine: EngineItem) {
   selected.value = engine;
   showDetailModal.value = true;
   connectLogs();
-  loadHistory();
+  scheduleHistoryLoad();
 }
 
 function closeDetailModal() {
@@ -1131,12 +1132,37 @@ function connectLogs() {
   };
 }
 
+let historyLoadTimer: number | null = null;
+let historyRequestId = 0;
+
+function scheduleHistoryLoad() {
+  if (historyLoadTimer !== null) {
+    window.clearTimeout(historyLoadTimer);
+  }
+  historyLoadTimer = window.setTimeout(() => {
+    historyLoadTimer = null;
+    void loadHistory();
+  }, 150);
+}
+
+function deferUiUpdate(task: () => void) {
+  const idle = (globalThis as any).requestIdleCallback as
+    | ((cb: () => void, options?: { timeout: number }) => number)
+    | undefined;
+  if (idle) {
+    idle(() => task(), { timeout: 200 });
+  } else {
+    window.setTimeout(task, 0);
+  }
+}
+
 // Pull status/log history for the selected engine.
 async function loadHistory() {
   if (!selected.value) {
     return;
   }
 
+  const requestId = ++historyRequestId;
   const since = new Date(Date.now() - historyMinutes.value * 60 * 1000).toISOString();
   const { host, instance } = selected.value;
   const [statusRes, logsRes] = await Promise.all([
@@ -1148,14 +1174,22 @@ async function loadHistory() {
     )
   ]);
 
+  if (requestId !== historyRequestId) {
+    return;
+  }
+
   if (statusRes.ok) {
     const body = (await statusRes.json()) as { entries: EngineInstance[] };
-    statusHistory.value = body.entries ?? [];
+    deferUiUpdate(() => {
+      statusHistory.value = body.entries ?? [];
+    });
   }
 
   if (logsRes.ok) {
     const body = (await logsRes.json()) as { entries: LogEntry[] };
-    logHistory.value = body.entries ?? [];
+    deferUiUpdate(() => {
+      logHistory.value = body.entries ?? [];
+    });
   }
 }
 
@@ -1357,7 +1391,7 @@ function createEmptyConfigForm() {
     name: "",
     engine_type: "Vllm" as EngineConfig["engine_type"],
     command: "",
-    envText: "",
+    envEntries: [] as EnvVar[],
     working_dir: "",
     auto_restart_enabled: false,
     auto_restart_max_retries: 0,
@@ -1395,11 +1429,11 @@ function generateHostId() {
   return `host-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-async function loadConfigs() {
+async function loadConfigs(): Promise<EngineConfig[]> {
   configErrors.value = [];
   if (!configHostId.value) {
     configs.value = [];
-    return;
+    return [];
   }
 
   try {
@@ -1407,13 +1441,33 @@ async function loadConfigs() {
     if (!res.ok) {
       configErrors.value = [`Failed to load configs (HTTP ${res.status})`];
       configs.value = [];
-      return;
+      return [];
     }
     const body = (await res.json()) as { configs: EngineConfig[] };
     configs.value = body.configs ?? [];
+    return configs.value;
   } catch (err) {
     configErrors.value = [(err as Error).message];
+    return [];
   }
+}
+
+function updateConfigNameMapForHost(hostId: string, hostConfigs: EngineConfig[]) {
+  const map: Record<string, string> = {};
+  for (const config of hostConfigs ?? []) {
+    map[config.id] = config.name;
+  }
+  configNameByHost.value = { ...configNameByHost.value, [hostId]: map };
+  engines.value = engines.value.map((engine) => {
+    if (engine.host.id !== hostId) {
+      return engine;
+    }
+    const configName = map[engine.instance.config_id];
+    if (configName === engine.configName) {
+      return engine;
+    }
+    return { ...engine, configName };
+  });
 }
 
 async function loadModels() {
@@ -1640,7 +1694,7 @@ function editConfig(config: EngineConfig) {
     name: config.name,
     engine_type: config.engine_type,
     command: config.command,
-    envText: config.env.map((item) => `${item.key}=${item.value}`).join("\n"),
+    envEntries: config.env.map((item) => ({ key: item.key, value: item.value })),
     working_dir: config.working_dir ?? "",
     auto_restart_enabled: config.auto_restart.enabled,
     auto_restart_max_retries: config.auto_restart.max_retries,
@@ -1678,14 +1732,14 @@ async function saveConfig() {
     errors.push("Command is required.");
   }
 
-  const envEntries = parseEnvLines(configForm.value.envText, errors);
+  const envEntries = buildEnvEntries(configForm.value.envEntries, errors);
   if (errors.length) {
     configErrors.value = errors;
     return;
   }
 
   let args: string[] = [];
-  // Build args from the template-specific form, keeping unknown flags in extraArgsText.
+  // Build args from the template-specific form, keeping unknown flags in extra args.
   if (configForm.value.engine_type === "Vllm" || configForm.value.engine_type === "Lvllm") {
     args = buildVllmArgs(vllmArgsForm.value);
   } else if (
@@ -1779,8 +1833,10 @@ async function saveConfig() {
 
     closeConfigModal();
     resetConfigForm();
-    await loadConfigs();
-    await refreshAll();
+    const nextConfigs = await loadConfigs();
+    if (configHostId.value) {
+      updateConfigNameMapForHost(configHostId.value, nextConfigs);
+    }
     return;
   }
 
@@ -1797,8 +1853,10 @@ async function saveConfig() {
 
   closeConfigModal();
   resetConfigForm();
-  await loadConfigs();
-  await refreshAll();
+  const nextConfigs = await loadConfigs();
+  if (configHostId.value) {
+    updateConfigNameMapForHost(configHostId.value, nextConfigs);
+  }
 }
 
 async function deleteConfig(config: EngineConfig) {
@@ -1816,8 +1874,10 @@ async function deleteConfig(config: EngineConfig) {
     configErrors.value = [`Delete failed (HTTP ${res.status}).`];
     return;
   }
-  await loadConfigs();
-  await refreshAll();
+  const nextConfigs = await loadConfigs();
+  if (configHostId.value) {
+    updateConfigNameMapForHost(configHostId.value, nextConfigs);
+  }
 }
 
 async function deleteConfigFromModal() {
@@ -1837,23 +1897,20 @@ function selectHost(host: Host) {
   loadModels();
 }
 
-function parseEnvLines(raw: string, errors: string[]) {
-  const entries: EnvVar[] = [];
-  const lines = raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  for (const line of lines) {
-    const index = line.indexOf("=");
-    if (index <= 0) {
-      errors.push(`Env line "${line}" must be KEY=VALUE.`);
+function buildEnvEntries(entries: EnvVar[], errors: string[]) {
+  const cleaned: EnvVar[] = [];
+  for (const entry of entries) {
+    const key = entry.key.trim();
+    const value = entry.value ?? "";
+    if (!key) {
+      if (value.trim()) {
+        errors.push("Env var values must include a key.");
+      }
       continue;
     }
-    entries.push({ key: line.slice(0, index), value: line.slice(index + 1) });
+    cleaned.push({ key, value });
   }
-
-  return entries;
+  return cleaned;
 }
 
 function parseConcurrency(input: string) {

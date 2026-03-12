@@ -3,14 +3,14 @@ import { buildArgs, consumeFlag } from "./shared";
 export type KTransformersArgsForm = {
   modelPath: string;
   port: string;
-  extraArgsText: string;
+  extraArgs: string[];
 };
 
 export function createKTransformersArgsForm(): KTransformersArgsForm {
   return {
     modelPath: "",
     port: "",
-    extraArgsText: ""
+    extraArgs: []
   };
 }
 
@@ -24,7 +24,7 @@ export function parseKTransformersArgs(args: string[]): KTransformersArgsForm {
   return {
     modelPath: model.value,
     port: port.value,
-    extraArgsText: rest.join("\n")
+    extraArgs: rest
   };
 }
 
@@ -37,5 +37,5 @@ export function buildKTransformersArgs(form: KTransformersArgsForm) {
     base.push("--port", form.port.trim());
   }
 
-  return buildArgs(base, form.extraArgsText);
+  return buildArgs(base, form.extraArgs);
 }

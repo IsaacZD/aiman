@@ -5,7 +5,7 @@ export type LlamaCppArgsForm = {
   port: string;
   gpuLayers: string;
   ctxSize: string;
-  extraArgsText: string;
+  extraArgs: string[];
 };
 
 export function createLlamaCppArgsForm(): LlamaCppArgsForm {
@@ -14,7 +14,7 @@ export function createLlamaCppArgsForm(): LlamaCppArgsForm {
     port: "",
     gpuLayers: "",
     ctxSize: "",
-    extraArgsText: ""
+    extraArgs: []
   };
 }
 
@@ -34,7 +34,7 @@ export function parseLlamaCppArgs(args: string[]): LlamaCppArgsForm {
     port: port.value,
     gpuLayers: gpuLayers.value,
     ctxSize: ctxSize.value,
-    extraArgsText: rest.join("\n")
+    extraArgs: rest
   };
 }
 
@@ -53,5 +53,5 @@ export function buildLlamaCppArgs(form: LlamaCppArgsForm) {
     base.push("--ctx-size", form.ctxSize.trim());
   }
 
-  return buildArgs(base, form.extraArgsText);
+  return buildArgs(base, form.extraArgs);
 }

@@ -27,8 +27,12 @@
       <input v-model="form.ctxSize" type="text" placeholder="4096" />
     </label>
     <label>
-      Additional args (one per line)
-      <textarea v-model="form.extraArgsText" rows="4" placeholder="--threads\n8"></textarea>
+      Additional args
+      <ArgumentListEditor
+        v-model="form.extraArgs"
+        add-label="Add argument"
+        placeholder="--threads 8"
+      />
     </label>
   </div>
 </template>
@@ -36,6 +40,7 @@
 <script setup lang="ts">
 import { computed, defineModel } from "vue";
 import type { LlamaCppArgsForm } from "../engine-args/llamaCpp";
+import ArgumentListEditor from "./ArgumentListEditor.vue";
 
 type ModelOption = {
   path: string;

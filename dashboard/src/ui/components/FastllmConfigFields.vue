@@ -19,8 +19,8 @@
       <input v-model="form.port" type="text" placeholder="8080" />
     </label>
     <label>
-      Additional args (one per line)
-      <textarea v-model="form.extraArgsText" rows="4" placeholder="--model-name\nqwen"></textarea>
+      Additional args
+      <ArgumentListEditor v-model="form.extraArgs" add-label="Add argument" placeholder="--model-name qwen" />
     </label>
   </div>
 </template>
@@ -28,6 +28,7 @@
 <script setup lang="ts">
 import { computed, defineModel } from "vue";
 import type { FastllmArgsForm } from "../engine-args/fastllm";
+import ArgumentListEditor from "./ArgumentListEditor.vue";
 
 type ModelOption = {
   path: string;
