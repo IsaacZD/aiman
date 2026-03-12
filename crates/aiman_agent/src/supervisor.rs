@@ -523,8 +523,23 @@ async fn spawn_process(config: &EngineConfig) -> anyhow::Result<tokio::process::
         env_count = config.env.len(),
         "spawning engine process"
     );
-    let mut command = Command::new(&config.command);
-    command.args(&config.args);
+    let mut parts = split_command_input(&config.command);
+    let command_name = parts
+        .first()
+        .cloned()
+        .unwrap_or_else(|| config.command.clone());
+    if !parts.is_empty() {
+        parts.remove(0);
+    }
+    let mut command = Command::new(&command_name);
+    if !parts.is_empty() {
+        command.args(parts);
+    }
+    let mut expanded_args = Vec::new();
+    for arg in &config.args {
+        expanded_args.extend(split_command_input(arg));
+    }
+    command.args(expanded_args);
 
     if let Some(dir) = &config.working_dir {
         command.current_dir(dir);
@@ -540,6 +555,48 @@ async fn spawn_process(config: &EngineConfig) -> anyhow::Result<tokio::process::
         .spawn()?;
 
     Ok(child)
+}
+
+fn split_command_input(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escape = false;
+    for ch in input.chars() {
+        if escape {
+            current.push(ch);
+            escape = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escape = true;
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            if quote == Some(ch) {
+                quote = None;
+                continue;
+            }
+            if quote.is_none() {
+                quote = Some(ch);
+                continue;
+            }
+        }
+        if quote.is_none() && ch.is_whitespace() {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        current.push(ch);
+    }
+    if escape {
+        current.push('\\');
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
 }
 
 // Read log lines, store to buffer + JSONL, and broadcast.

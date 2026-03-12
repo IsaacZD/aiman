@@ -81,7 +81,6 @@ export function consumeFlag(args: string[], flag: string, shortFlag?: string): C
 export function buildArgs(base: string[], extraArgs: string[]) {
   const cleaned = extraArgs
     .map((arg) => arg.trim())
-    .filter(Boolean)
-    .flatMap((arg) => splitArgsLine(arg));
+    .filter(Boolean);
   return [...base, ...cleaned];
 }

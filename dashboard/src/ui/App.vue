@@ -935,11 +935,11 @@ const enginesByHost = computed(() => {
 
 // Defaults keep the config form helpful without forcing a full command line.
 const defaultCommands: Record<EngineConfig["engine_type"], string> = {
-  Vllm: "python",
-  Lvllm: "lvllm",
+  Vllm: "vllm serve",
+  Lvllm: "lvllm serve",
   LlamaCpp: "llama-server",
   ik_llamacpp: "ikllama-server",
-  fastllm: "ftllm",
+  fastllm: "ftllm serve",
   KTransformers: "ktransformers-server",
   Custom: ""
 };
@@ -1759,7 +1759,7 @@ async function saveConfig() {
     id: configForm.value.id.trim(),
     name: configForm.value.name.trim(),
     engine_type: configForm.value.engine_type,
-    command: configForm.value.command.trim(),
+    command: configForm.value.command,
     args,
     env: envEntries,
     working_dir: configForm.value.working_dir.trim()
