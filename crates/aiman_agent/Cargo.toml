@@ -18,6 +18,7 @@ toml = "0.9"
 futures-util = "0.3"
 sysinfo = "0.30"
 reqwest = { version = "0.12", features = ["json"] }
+libc = "0.2"
 
 [dependencies.aiman-shared]
 path = "../shared"

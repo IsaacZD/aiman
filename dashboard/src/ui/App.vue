@@ -291,6 +291,9 @@
                 <p class="config-meta config-id">{{ config.id }}</p>
               </div>
               <div class="config-actions">
+                <button class="ghost" @click="openConfigTemplateModal(config)">
+                  Create from template
+                </button>
                 <button class="secondary" @click="openConfigModal(config)">Edit</button>
               </div>
             </article>
@@ -301,7 +304,7 @@
     </section>
 
     <div v-if="showDetailModal" class="modal-backdrop">
-      <div class="modal modal-wide">
+      <div class="modal modal-wide detail-modal">
         <div class="modal-head">
           <h3>Engine detail</h3>
           <button class="ghost" @click="closeDetailModal">Close</button>
@@ -330,24 +333,13 @@
               Load history
             </button>
           </div>
-          <div class="history-grid">
-            <div class="history-card">
-              <h3>Status history</h3>
-              <div class="history-list">
-                <p v-if="!statusHistory.length" class="empty">No status entries.</p>
-                <p v-for="(item, idx) in statusHistory" :key="idx">
-                  [{{ item.ts ?? "—" }}] {{ item.status }} (PID {{ item.pid ?? "—" }})
-                </p>
-              </div>
-            </div>
-            <div class="history-card">
-              <h3>Log history</h3>
-              <div class="history-list">
-                <p v-if="!logHistory.length" class="empty">No log entries.</p>
-                <p v-for="(item, idx) in logHistory" :key="idx">
-                  [{{ item.ts }}] {{ item.stream }}: {{ item.line }}
-                </p>
-              </div>
+          <div class="history-card">
+            <h3>Log history</h3>
+            <div class="history-list">
+              <p v-if="!logHistory.length" class="empty">No log entries.</p>
+              <p v-for="(item, idx) in logHistory" :key="idx">
+                [{{ item.ts }}] {{ item.stream }}: {{ item.line }}
+              </p>
             </div>
           </div>
         </div>
@@ -1651,6 +1643,26 @@ function openConfigModal(config?: EngineConfig) {
   } else {
     resetConfigForm();
   }
+  if (!configForm.value.command.trim()) {
+    configForm.value.command = defaultCommands[configForm.value.engine_type];
+  }
+  loadModels();
+  showConfigModal.value = true;
+}
+
+function openConfigTemplateModal(config: EngineConfig) {
+  if (!configHostId.value) {
+    configErrors.value = ["Select a host before creating a config."];
+    return;
+  }
+  configErrors.value = [];
+  editConfig(config);
+  configMode.value = "create";
+  configOriginalId.value = null;
+  configForm.value = {
+    ...configForm.value,
+    id: generateConfigId()
+  };
   if (!configForm.value.command.trim()) {
     configForm.value.command = defaultCommands[configForm.value.engine_type];
   }

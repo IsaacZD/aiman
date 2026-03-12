@@ -465,8 +465,7 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
                                 pid = pid,
                                 "stop signal received; terminating engine process"
                             );
-                            let _ = child.kill().await;
-                            let _ = child.wait().await;
+                            terminate_process_tree(&mut child).await;
                             set_status(&handle, EngineStatus::Stopped, None, None).await;
                             break;
                         }
@@ -541,6 +540,20 @@ async fn spawn_process(config: &EngineConfig) -> anyhow::Result<tokio::process::
     }
     command.args(expanded_args);
 
+    #[cfg(unix)]
+    {
+        unsafe {
+            command.pre_exec(|| {
+                // Start the child in its own process group so we can terminate the whole tree.
+                if libc::setpgid(0, 0) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+    }
+
     if let Some(dir) = &config.working_dir {
         command.current_dir(dir);
     }
@@ -597,6 +610,32 @@ fn split_command_input(input: &str) -> Vec<String> {
         tokens.push(current);
     }
     tokens
+}
+
+async fn terminate_process_tree(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child.id() {
+            let pgid = pid as i32;
+            unsafe {
+                // SIGTERM process group first.
+                libc::killpg(pgid, libc::SIGTERM);
+            }
+            let wait_result =
+                tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+            if wait_result.is_err() {
+                unsafe {
+                    libc::killpg(pgid, libc::SIGKILL);
+                }
+                let _ = child.wait().await;
+            }
+            return;
+        }
+    }
+
+    // Fallback for non-unix or missing pid.
+    let _ = child.kill().await;
+    let _ = child.wait().await;
 }
 
 // Read log lines, store to buffer + JSONL, and broadcast.
