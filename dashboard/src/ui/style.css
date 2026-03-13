@@ -337,6 +337,7 @@ h2 {
 .status-dot.is-starting {
   background: #f2c94c;
   box-shadow: 0 0 8px rgba(242, 201, 76, 0.6);
+  animation: status-pulse 1.2s ease-in-out infinite;
 }
 
 .status-dot.is-stopped {
@@ -347,6 +348,20 @@ h2 {
 .status-dot.is-unknown {
   background: #98a2b3;
   box-shadow: 0 0 8px rgba(152, 162, 179, 0.5);
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 8px rgba(242, 201, 76, 0.4);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.25);
+    box-shadow: 0 0 14px rgba(242, 201, 76, 0.85);
+    opacity: 1;
+  }
 }
 
 .pill {

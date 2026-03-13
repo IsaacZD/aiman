@@ -321,16 +321,22 @@
         <div class="history">
           <div class="history-controls">
             <label>
-              Show last
-              <select v-model.number="historyMinutes" @change="scheduleHistoryLoad">
-                <option :value="30">30 minutes</option>
-                <option :value="120">2 hours</option>
-                <option :value="360">6 hours</option>
-                <option :value="1440">24 hours</option>
+              Session
+              <select v-model="selectedSessionId" :disabled="!logSessions.length">
+                <option v-for="session in logSessions" :key="session.id" :value="session.id">
+                  {{ formatSessionLabel(session) }}
+                </option>
               </select>
             </label>
-            <button class="secondary" @click="scheduleHistoryLoad" :disabled="!selected">
-              Load history
+            <button
+              class="secondary"
+              @click="selectCurrentSession"
+              :disabled="!currentSessionId"
+            >
+              Current session
+            </button>
+            <button class="secondary" @click="loadLogSessions" :disabled="!selected">
+              Refresh sessions
             </button>
           </div>
           <div class="history-card">
@@ -718,8 +724,15 @@ type EnginesResult = {
 
 type LogEntry = {
   ts: string;
+  session_id: string;
   stream: string;
   line: string;
+};
+
+type LogSession = {
+  id: string;
+  started_at: string;
+  stopped_at?: string | null;
 };
 
 type ModelArtifact = {
@@ -811,9 +824,9 @@ const errors = ref<string[]>([]);
 const loading = ref(false);
 const lastRefreshed = ref<string | null>(null);
 const mainTab = ref<"engines" | "benchmarks" | "admin">("engines");
-const historyMinutes = ref(120);
-const statusHistory = ref<EngineInstance[]>([]);
 const logHistory = ref<LogEntry[]>([]);
+const logSessions = ref<LogSession[]>([]);
+const selectedSessionId = ref<string | null>(null);
 const hardwareByHost = ref<Record<string, HardwareInfo | null>>({});
 const hardwareErrorsByHost = ref<Record<string, string>>({});
 const engineResultsByHost = ref<Record<string, EnginesResult>>({});
@@ -856,6 +869,11 @@ const benchmarkRunning = ref(false);
 const selectedHost = computed(() =>
   hosts.value.find((host) => host.id === configHostId.value) ?? null
 );
+
+const currentSessionId = computed(() => {
+  const running = logSessions.value.find((session) => !session.stopped_at);
+  return running?.id ?? null;
+});
 
 const vllmModelOptions = computed(() =>
   modelArtifacts.value.filter((artifact) => artifact.kind === "snapshot")
@@ -956,6 +974,13 @@ watch(
     if (next === "benchmarks") {
       loadBenchmarks();
     }
+  }
+);
+
+watch(
+  () => selectedSessionId.value,
+  () => {
+    scheduleLogHistoryLoad();
   }
 );
 
@@ -1083,14 +1108,17 @@ function openDetailModal(engine: EngineItem) {
   selected.value = engine;
   showDetailModal.value = true;
   connectLogs();
-  scheduleHistoryLoad();
+  void loadLogSessions();
+  startSessionAutoRefresh();
 }
 
 function closeDetailModal() {
   showDetailModal.value = false;
   logs.value = [];
-  statusHistory.value = [];
   logHistory.value = [];
+  logSessions.value = [];
+  selectedSessionId.value = null;
+  stopSessionAutoRefresh();
   if (ws) {
     ws.close();
     ws = null;
@@ -1126,14 +1154,32 @@ function connectLogs() {
 
 let historyLoadTimer: number | null = null;
 let historyRequestId = 0;
+let sessionRefreshTimer: number | null = null;
 
-function scheduleHistoryLoad() {
+function startSessionAutoRefresh() {
+  stopSessionAutoRefresh();
+  sessionRefreshTimer = window.setInterval(() => {
+    if (showDetailModal.value) {
+      void loadLogSessions();
+      void loadLogHistory();
+    }
+  }, 5000);
+}
+
+function stopSessionAutoRefresh() {
+  if (sessionRefreshTimer !== null) {
+    window.clearInterval(sessionRefreshTimer);
+    sessionRefreshTimer = null;
+  }
+}
+
+function scheduleLogHistoryLoad() {
   if (historyLoadTimer !== null) {
     window.clearTimeout(historyLoadTimer);
   }
   historyLoadTimer = window.setTimeout(() => {
     historyLoadTimer = null;
-    void loadHistory();
+    void loadLogHistory();
   }, 150);
 }
 
@@ -1148,33 +1194,26 @@ function deferUiUpdate(task: () => void) {
   }
 }
 
-// Pull status/log history for the selected engine.
-async function loadHistory() {
+// Pull log history for the selected engine/session.
+async function loadLogHistory() {
   if (!selected.value) {
+    return;
+  }
+  if (!selectedSessionId.value) {
+    logHistory.value = [];
     return;
   }
 
   const requestId = ++historyRequestId;
-  const since = new Date(Date.now() - historyMinutes.value * 60 * 1000).toISOString();
   const { host, instance } = selected.value;
-  const [statusRes, logsRes] = await Promise.all([
-    fetch(
-      `/api/hosts/${host.id}/engines/${instance.id}/status?since=${encodeURIComponent(since)}&limit=300`
-    ),
-    fetch(
-      `/api/hosts/${host.id}/engines/${instance.id}/logs?since=${encodeURIComponent(since)}&limit=500`
-    )
-  ]);
+  const logsRes = await fetch(
+    `/api/hosts/${host.id}/engines/${instance.id}/logs?session_id=${encodeURIComponent(
+      selectedSessionId.value
+    )}&limit=1000`
+  );
 
   if (requestId !== historyRequestId) {
     return;
-  }
-
-  if (statusRes.ok) {
-    const body = (await statusRes.json()) as { entries: EngineInstance[] };
-    deferUiUpdate(() => {
-      statusHistory.value = body.entries ?? [];
-    });
   }
 
   if (logsRes.ok) {
@@ -1183,6 +1222,52 @@ async function loadHistory() {
       logHistory.value = body.entries ?? [];
     });
   }
+}
+
+async function loadLogSessions() {
+  if (!selected.value) {
+    return;
+  }
+
+  const requestId = ++historyRequestId;
+  const { host, instance } = selected.value;
+  const res = await fetch(
+    `/api/hosts/${host.id}/engines/${instance.id}/logs/sessions?limit=50`
+  );
+
+  if (requestId !== historyRequestId) {
+    return;
+  }
+
+  if (res.ok) {
+    const body = (await res.json()) as { sessions: LogSession[] };
+    deferUiUpdate(() => {
+      logSessions.value = body.sessions ?? [];
+      if (!logSessions.value.length) {
+        selectedSessionId.value = null;
+        logHistory.value = [];
+        return;
+      }
+      const nextId = logSessions.value[0]?.id ?? null;
+      if (!selectedSessionId.value || !logSessions.value.some((s) => s.id === selectedSessionId.value)) {
+        selectedSessionId.value = nextId;
+      }
+      scheduleLogHistoryLoad();
+    });
+  }
+}
+
+function formatSessionLabel(session: LogSession) {
+  const stopped = session.stopped_at ? session.stopped_at : "running";
+  const runningTag = session.stopped_at ? "" : " (current)";
+  return `${session.started_at} → ${stopped}${runningTag}`;
+}
+
+function selectCurrentSession() {
+  if (!currentSessionId.value) {
+    return;
+  }
+  selectedSessionId.value = currentSessionId.value;
 }
 
 function clearLogs() {
@@ -2028,5 +2113,6 @@ onBeforeUnmount(() => {
   if (ws) {
     ws.close();
   }
+  stopSessionAutoRefresh();
 });
 </script>

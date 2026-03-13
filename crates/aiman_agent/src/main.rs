@@ -13,7 +13,7 @@ use axum::{middleware, routing::get, routing::post, routing::put, Router};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::api::{
-    benchmark_engine, create_config, delete_config, engine_logs, engine_logs_ws,
+    benchmark_engine, create_config, delete_config, engine_log_sessions, engine_logs, engine_logs_ws,
     engine_status_history, get_engine, hardware_info, health, list_benchmarks, list_configs,
     list_engines, scan_models, start_engine, stop_engine, update_config,
 };
@@ -91,6 +91,7 @@ fn main() {
         .route("/v1/engines/{id}/start", post(start_engine))
         .route("/v1/engines/{id}/stop", post(stop_engine))
         .route("/v1/engines/{id}/logs", get(engine_logs))
+        .route("/v1/engines/{id}/logs/sessions", get(engine_log_sessions))
         .route("/v1/engines/{id}/logs/ws", get(engine_logs_ws))
         .route("/v1/engines/{id}/status", get(engine_status_history))
         .route("/v1/engines/{id}/benchmark", post(benchmark_engine))

@@ -7,13 +7,13 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 
-use aiman_shared::{EngineConfig, EngineInstance, EngineStatus, LogEntry};
+use aiman_shared::{EngineConfig, EngineInstance, EngineStatus, LogEntry, LogSession};
 
 use crate::benchmark::{run_benchmark, BenchmarkRecord, BenchmarkRequest};
 use crate::hardware::HardwareInfo;
 use crate::models::scan_model_libraries;
 use crate::state::AppState;
-use crate::supervisor::{map_supervisor_error, read_jsonl};
+use crate::supervisor::{map_supervisor_error, read_log_entries, read_log_sessions, read_jsonl};
 
 pub async fn health() -> &'static str {
     "ok"
@@ -135,6 +135,7 @@ pub async fn engine_logs_ws(
 pub(crate) struct LogQuery {
     since: Option<String>,
     limit: Option<usize>,
+    session_id: Option<String>,
 }
 
 pub async fn engine_logs(
@@ -146,6 +147,7 @@ pub async fn engine_logs(
         engine_id = %id,
         since = query.since.as_deref(),
         limit = query.limit,
+        session_id = query.session_id.as_deref(),
         "engine logs requested"
     );
     let handle = state
@@ -154,11 +156,39 @@ pub async fn engine_logs(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    let entries = read_jsonl(&handle.log_path, query.since.as_deref(), query.limit)
+    let entries = read_log_entries(
+        &handle.log_path,
+        query.since.as_deref(),
+        query.limit,
+        query.session_id.as_deref(),
+    )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(LogHistoryResponse { entries }))
+}
+
+pub async fn engine_log_sessions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<LogQuery>,
+) -> Result<Json<LogSessionsResponse>, StatusCode> {
+    tracing::debug!(
+        engine_id = %id,
+        limit = query.limit,
+        "engine log sessions requested"
+    );
+    let handle = state
+        .supervisor
+        .get_handle(&id)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let sessions = read_log_sessions(&handle.session_path, query.limit)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(LogSessionsResponse { sessions }))
 }
 
 pub async fn engine_status_history(
@@ -334,6 +364,11 @@ pub(crate) struct DeleteResponse {
 #[derive(Serialize)]
 pub(crate) struct LogHistoryResponse {
     entries: Vec<LogEntry>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct LogSessionsResponse {
+    sessions: Vec<LogSession>,
 }
 
 #[derive(Serialize)]

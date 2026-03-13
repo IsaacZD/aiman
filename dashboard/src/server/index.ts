@@ -430,6 +430,36 @@ server.get("/api/hosts/:hostId/engines/:engineId/logs", async (request, reply) =
   return reply.code(res.status).send(body ?? { ok: res.ok });
 });
 
+// Proxy engine log sessions to the selected host.
+server.get("/api/hosts/:hostId/engines/:engineId/logs/sessions", async (request, reply) => {
+  const { hostId, engineId } = request.params as { hostId: string; engineId: string };
+  const host = await findHost(hostId);
+  if (!host) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+
+  const query = request.query as Record<string, string | string[] | undefined>;
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        search.append(key, item);
+      }
+    } else if (value !== undefined) {
+      search.set(key, String(value));
+    }
+  }
+
+  const url = `${host.base_url}/v1/engines/${engineId}/logs/sessions${
+    search.toString() ? `?${search}` : ""
+  }`;
+  const res = await fetch(url, {
+    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
+  });
+  const body = await safeJson(res);
+  return reply.code(res.status).send(body ?? { ok: res.ok });
+});
+
 // Proxy engine status history to the selected host.
 server.get("/api/hosts/:hostId/engines/:engineId/status", async (request, reply) => {
   const { hostId, engineId } = request.params as { hostId: string; engineId: string };

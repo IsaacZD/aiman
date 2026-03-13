@@ -6,7 +6,8 @@ use std::{
 };
 
 use aiman_shared::{
-    AutoRestart, EngineConfig, EngineInstance, EngineStatus, EngineType, LogEntry, LogStream,
+    AutoRestart, EngineConfig, EngineInstance, EngineStatus, EngineType, LogEntry, LogSession,
+    LogStream,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -92,6 +93,7 @@ impl Supervisor {
                 Arc::new(EngineHandle::new(
                     config,
                     data_dir.join("logs").join(format!("{id}.jsonl")),
+                    data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
                     data_dir.join("status").join(format!("{id}.jsonl")),
                 )),
             );
@@ -155,6 +157,7 @@ impl Supervisor {
             Arc::new(EngineHandle::new(
                 config.clone(),
                 self.data_dir.join("logs").join(format!("{id}.jsonl")),
+                self.data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
                 self.data_dir.join("status").join(format!("{id}.jsonl")),
             )),
         );
@@ -190,6 +193,7 @@ impl Supervisor {
             Arc::new(EngineHandle::new(
                 config.clone(),
                 self.data_dir.join("logs").join(format!("{id}.jsonl")),
+                self.data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
                 self.data_dir.join("status").join(format!("{id}.jsonl")),
             )),
         );
@@ -313,8 +317,10 @@ pub struct EngineHandle {
     pub log_tx: broadcast::Sender<LogEntry>,
     control: Mutex<EngineControl>,
     pub log_path: PathBuf,
+    pub session_path: PathBuf,
     pub status_path: PathBuf,
     log_write_lock: Arc<Mutex<()>>,
+    session_write_lock: Arc<Mutex<()>>,
     status_write_lock: Arc<Mutex<()>>,
 }
 
@@ -325,7 +331,12 @@ struct EngineControl {
 }
 
 impl EngineHandle {
-    fn new(config: EngineConfig, log_path: PathBuf, status_path: PathBuf) -> Self {
+    fn new(
+        config: EngineConfig,
+        log_path: PathBuf,
+        session_path: PathBuf,
+        status_path: PathBuf,
+    ) -> Self {
         let instance = EngineInstance {
             id: config.id.clone(),
             config_id: config.id.clone(),
@@ -349,8 +360,10 @@ impl EngineHandle {
                 task: None,
             }),
             log_path,
+            session_path,
             status_path,
             log_write_lock: Arc::new(Mutex::new(())),
+            session_write_lock: Arc::new(Mutex::new(())),
             status_write_lock: Arc::new(Mutex::new(())),
         }
     }
@@ -397,8 +410,10 @@ impl EngineHandle {
             log_buffer: self.log_buffer.clone(),
             log_tx: self.log_tx.clone(),
             log_path: self.log_path.clone(),
+            session_path: self.session_path.clone(),
             status_path: self.status_path.clone(),
             log_write_lock: self.log_write_lock.clone(),
+            session_write_lock: self.session_write_lock.clone(),
             status_write_lock: self.status_write_lock.clone(),
         }
     }
@@ -412,8 +427,10 @@ struct EngineTaskHandle {
     log_buffer: Arc<Mutex<VecDeque<LogEntry>>>,
     log_tx: broadcast::Sender<LogEntry>,
     log_path: PathBuf,
+    session_path: PathBuf,
     status_path: PathBuf,
     log_write_lock: Arc<Mutex<()>>,
+    session_write_lock: Arc<Mutex<()>>,
     status_write_lock: Arc<Mutex<()>>,
 }
 
@@ -444,6 +461,19 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
                     None
                 };
                 let (ready_tx, mut ready_rx) = watch::channel(false);
+                let session_id = new_session_id();
+                let session_started_at = now();
+                append_session(
+                    &handle.session_path,
+                    &handle.session_write_lock,
+                    &LogSession {
+                        id: session_id.clone(),
+                        started_at: session_started_at.clone(),
+                        stopped_at: None,
+                    },
+                )
+                .await;
+                let mut session_stopped_at: Option<String> = None;
                 tracing::info!(
                     engine_id = %handle.config.id,
                     pid = pid,
@@ -464,6 +494,7 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
                         handle.clone(),
                         BufReader::new(stdout),
                         LogStream::Stdout,
+                        session_id.clone(),
                         ready_tx.clone(),
                         ready_marker.clone(),
                     )));
@@ -473,6 +504,7 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
                         handle.clone(),
                         BufReader::new(stderr),
                         LogStream::Stderr,
+                        session_id.clone(),
                         ready_tx.clone(),
                         ready_marker.clone(),
                     )));
@@ -483,17 +515,19 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
                     let wait_for_ready = async {
                         loop {
                             if *ready_rx.borrow() {
-                                break;
+                                return true;
                             }
                             if ready_rx.changed().await.is_err() {
-                                break;
+                                return false;
                             }
                         }
                     };
 
                     tokio::select! {
-                        _ = wait_for_ready => {
-                            set_status(&handle, EngineStatus::Running, pid, Some(now())).await;
+                        ready = wait_for_ready => {
+                            if ready {
+                                set_status(&handle, EngineStatus::Running, pid, Some(now())).await;
+                            }
                         }
                         _ = stop_rx.changed() => {
                             if *stop_rx.borrow() {
@@ -505,6 +539,7 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
                                 terminate_process_tree(&mut child).await;
                                 set_status(&handle, EngineStatus::Stopped, None, None).await;
                                 should_monitor = false;
+                                session_stopped_at = Some(now());
                             }
                         }
                         status = child.wait() => {
@@ -517,6 +552,7 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
                             );
                             set_exit_status(&handle, code).await;
                             should_monitor = false;
+                            session_stopped_at = Some(now());
                         }
                     }
                 }
@@ -532,6 +568,7 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
                                 );
                                 terminate_process_tree(&mut child).await;
                                 set_status(&handle, EngineStatus::Stopped, None, None).await;
+                                session_stopped_at = Some(now());
                             }
                         }
                         status = child.wait() => {
@@ -543,9 +580,23 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
                                 "engine process exited"
                             );
                             set_exit_status(&handle, code).await;
+                            session_stopped_at = Some(now());
                         }
                     }
                 }
+
+                let session_stopped_at =
+                    session_stopped_at.unwrap_or_else(|| now());
+                append_session(
+                    &handle.session_path,
+                    &handle.session_write_lock,
+                    &LogSession {
+                        id: session_id,
+                        started_at: session_started_at,
+                        stopped_at: Some(session_stopped_at),
+                    },
+                )
+                .await;
 
                 if let Some(task) = stdout_task {
                     let _ = task.await;
@@ -708,6 +759,7 @@ async fn stream_logs<R: tokio::io::AsyncRead + Unpin>(
     handle: Arc<EngineTaskHandle>,
     reader: BufReader<R>,
     stream: LogStream,
+    session_id: String,
     ready_tx: Option<watch::Sender<bool>>,
     ready_marker: Option<String>,
 ) {
@@ -720,6 +772,7 @@ async fn stream_logs<R: tokio::io::AsyncRead + Unpin>(
         }
         let entry = LogEntry {
             ts: now(),
+            session_id: session_id.clone(),
             stream: stream.clone(),
             line,
         };
@@ -793,6 +846,14 @@ fn now() -> String {
     Utc::now().to_rfc3339()
 }
 
+fn new_session_id() -> String {
+    Utc::now().timestamp_millis().to_string()
+}
+
+async fn append_session(path: &PathBuf, lock: &Arc<Mutex<()>>, session: &LogSession) {
+    append_jsonl(path, lock, session).await;
+}
+
 // Append a JSONL line with a simple mutex to avoid interleaving.
 async fn append_jsonl<T: Serialize>(path: &PathBuf, lock: &Arc<Mutex<()>>, value: &T) {
     let _guard = lock.lock().await;
@@ -808,6 +869,88 @@ async fn append_jsonl<T: Serialize>(path: &PathBuf, lock: &Arc<Mutex<()>>, value
             let _ = file.write_all(b"\n").await;
         }
     }
+}
+
+// Read log JSONL with optional since + session filtering.
+pub async fn read_log_entries(
+    path: &PathBuf,
+    since: Option<&str>,
+    limit: Option<usize>,
+    session_id: Option<&str>,
+) -> anyhow::Result<Vec<LogEntry>> {
+    let file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let since_dt = since.and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok());
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut entries: VecDeque<LogEntry> = VecDeque::new();
+    let max = limit.unwrap_or(500);
+
+    while let Ok(Some(line)) = lines.next_line().await {
+        if let Ok(entry) = serde_json::from_str::<LogEntry>(&line) {
+            if let Some(since_dt) = since_dt {
+                if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&entry.ts) {
+                    if parsed < since_dt {
+                        continue;
+                    }
+                }
+            }
+            if let Some(session_id) = session_id {
+                if entry.session_id != session_id {
+                    continue;
+                }
+            }
+            if entries.len() >= max {
+                entries.pop_front();
+            }
+            entries.push_back(entry);
+        }
+    }
+
+    Ok(entries.into_iter().collect())
+}
+
+// Read log sessions and collapse start/stop records into a single entry per session.
+pub async fn read_log_sessions(
+    path: &PathBuf,
+    limit: Option<usize>,
+) -> anyhow::Result<Vec<LogSession>> {
+    let file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut sessions: HashMap<String, LogSession> = HashMap::new();
+
+    while let Ok(Some(line)) = lines.next_line().await {
+        if let Ok(entry) = serde_json::from_str::<LogSession>(&line) {
+            let session = sessions.entry(entry.id.clone()).or_insert(LogSession {
+                id: entry.id.clone(),
+                started_at: entry.started_at.clone(),
+                stopped_at: None,
+            });
+            if entry.started_at < session.started_at {
+                session.started_at = entry.started_at.clone();
+            }
+            if entry.stopped_at.is_some() {
+                session.stopped_at = entry.stopped_at.clone();
+            }
+        }
+    }
+
+    let mut values: Vec<_> = sessions.into_values().collect();
+    values.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+
+    if let Some(limit) = limit {
+        values.truncate(limit);
+    }
+
+    Ok(values)
 }
 
 // Read JSONL with optional since + limit filtering.

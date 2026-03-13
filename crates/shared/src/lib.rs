@@ -66,6 +66,7 @@ pub struct EngineInstance {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
     pub ts: String,
+    pub session_id: String,
     pub stream: LogStream,
     pub line: String,
 }
@@ -75,6 +76,14 @@ pub struct LogEntry {
 pub enum LogStream {
     Stdout,
     Stderr,
+}
+
+/// A log session bounded by engine start/stop.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogSession {
+    pub id: String,
+    pub started_at: String,
+    pub stopped_at: Option<String>,
 }
 
 /// Optional restart policy for crashed processes.
