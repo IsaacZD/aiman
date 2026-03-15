@@ -1,6 +1,9 @@
-{ config, lib, pkgs, ... }:
-
-let
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}: let
   cfg = config.services.aiman-dashboard;
   envList = lib.mapAttrsToList (name: value: "${name}=${toString value}") cfg.environment;
   baseEnv = [
@@ -15,9 +18,7 @@ let
   tmpRules =
     (lib.optional isDefaultStore "d /var/lib/aiman/dashboard 0750 ${cfg.user} ${cfg.group} -")
     ++ (lib.optional isDefaultStore "f ${cfg.hostsStore} 0640 ${cfg.user} ${cfg.group} -");
-
-in
-{
+in {
   options.services.aiman-dashboard = {
     enable = lib.mkEnableOption "aiman dashboard server";
 
@@ -90,8 +91,9 @@ in
 
     systemd.services.aiman-dashboard = {
       description = "aiman dashboard server";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" ];
+      wantedBy = ["multi-user.target"];
+      after = ["network.target"];
+      path = with pkgs; [bash];
       serviceConfig = {
         Type = "simple";
         User = cfg.user;
@@ -105,6 +107,6 @@ in
 
     systemd.tmpfiles.rules = tmpRules;
 
-    networking.firewall.allowedTCPPorts = lib.mkIf openFirewall [ cfg.port ];
+    networking.firewall.allowedTCPPorts = lib.mkIf openFirewall [cfg.port];
   };
 }
