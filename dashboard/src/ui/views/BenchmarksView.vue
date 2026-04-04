@@ -19,7 +19,14 @@
     </div>
 
     <div class="benchmark-list">
-      <article v-for="record in records" :key="record.id" class="benchmark-card">
+      <article
+        v-for="record in records"
+        :key="record.id"
+        class="benchmark-card"
+        :class="{ expanded: expanded.has(record.id) }"
+        @click="toggleCard(record.id)"
+      >
+        <!-- Head: always visible, click toggles expansion -->
         <div class="benchmark-head">
           <div>
             <h3>{{ record.engine_config.name }}</h3>
@@ -35,20 +42,23 @@
             <span class="pill">tg {{ record.settings.tg.join(",") }}</span>
             <span v-if="record.settings.prefix_caching" class="pill">prefix cache</span>
           </div>
+          <span class="benchmark-toggle-icon">▼</span>
         </div>
 
-        <div class="benchmark-details">
-          <div>
-            <p class="benchmark-label">Host hardware</p>
-            <p class="benchmark-value">
-              {{ formatCpu(record.host_hardware) }} •
-              {{ formatMemory(record.host_hardware) }} •
-              {{ formatGpus(record.host_hardware) }}
-            </p>
+        <!-- Body: hidden until expanded; @click.stop prevents toggling when selecting text -->
+        <div class="benchmark-card-body" @click.stop>
+          <div class="benchmark-details">
+            <div>
+              <p class="benchmark-label">Host hardware</p>
+              <p class="benchmark-value">
+                {{ formatCpu(record.host_hardware) }} •
+                {{ formatMemory(record.host_hardware) }} •
+                {{ formatGpus(record.host_hardware) }}
+              </p>
+            </div>
           </div>
+          <pre class="benchmark-output">{{ record.output }}</pre>
         </div>
-
-        <pre class="benchmark-output">{{ record.output }}</pre>
       </article>
       <p v-if="!records.length" class="empty">No benchmarks yet.</p>
     </div>
@@ -56,6 +66,7 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from "vue";
 import type { BenchmarkRecord } from "../types";
 import { formatBenchmarkTime, formatCpu, formatMemory, formatGpus } from "../utils/format";
 
@@ -68,4 +79,18 @@ defineProps<{
 defineEmits<{
   (e: "refresh"): void;
 }>();
+
+// ── collapsible card state ────────────────────────────────────────────────────
+
+const expanded = ref<Set<string>>(new Set());
+
+function toggleCard(id: string) {
+  if (expanded.value.has(id)) {
+    expanded.value.delete(id);
+  } else {
+    expanded.value.add(id);
+  }
+  // Reassign to trigger Vue reactivity on the Set reference.
+  expanded.value = new Set(expanded.value);
+}
 </script>

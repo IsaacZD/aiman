@@ -3,7 +3,7 @@
     <div class="panel-head">
       <div>
         <h2>Admin management</h2>
-        <p class="panel-sub">Manage hosts and engine configs in one place.</p>
+        <p class="panel-sub">Managing: <strong>{{ selectedHost?.name ?? '—' }}</strong></p>
       </div>
     </div>
 

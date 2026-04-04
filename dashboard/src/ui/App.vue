@@ -1,139 +1,190 @@
 <template>
-  <main class="page">
-    <header class="hero">
-      <div>
-        <p class="eyebrow">aiman dashboard</p>
-        <h1>LLM engines, centralized.</h1>
-        <p class="subtext">
-          Start, stop, and monitor engines across your LAN. Each card maps to a single engine
-          config on a host.
-        </p>
+  <div class="app-shell">
+    <!-- Topbar -->
+    <header class="topbar">
+      <span class="topbar-brand">aiman</span>
+      <div class="topbar-stats">
+        <span class="topbar-stat">
+          <span class="topbar-stat-dot hosts"></span>
+          <span class="topbar-stat-value">{{ hosts.length }}</span>
+          hosts
+        </span>
+        <span class="topbar-stat">
+          <span class="topbar-stat-dot running"></span>
+          <span class="topbar-stat-value">{{ runningCount }}</span>
+          running
+        </span>
+        <span class="topbar-stat">
+          <span class="topbar-stat-dot stopped"></span>
+          <span class="topbar-stat-value">{{ stoppedCount }}</span>
+          stopped
+        </span>
+        <span class="topbar-stat">
+          <span class="topbar-stat-dot starting"></span>
+          <span class="topbar-stat-value">{{ startingCount }}</span>
+          starting
+        </span>
       </div>
-      <div class="status-card">
-        <p class="status-label">Connected hosts</p>
-        <p class="status-value">{{ hosts.length }}</p>
-        <p class="status-hint">Last refresh {{ lastRefreshed ?? "—" }}</p>
-      </div>
+      <div class="topbar-spacer"></div>
+      <span v-if="lastRefreshed" class="topbar-lastrefresh">Refreshed {{ lastRefreshed }}</span>
+      <button class="secondary" @click="refreshAll" :disabled="loading">
+        {{ loading ? "Refreshing…" : "Refresh" }}
+      </button>
     </header>
 
-    <nav class="primary-tabs">
-      <button class="tab" :class="{ active: mainTab === 'engines' }" @click="mainTab = 'engines'">
-        Engines
-      </button>
-      <button
-        class="tab"
-        :class="{ active: mainTab === 'benchmarks' }"
-        @click="mainTab = 'benchmarks'"
-      >
-        Benchmarks
-      </button>
-      <button class="tab" :class="{ active: mainTab === 'admin' }" @click="mainTab = 'admin'">
-        Admin
-      </button>
+    <!-- Sidebar -->
+    <nav class="sidebar">
+      <div class="sidebar-nav">
+        <button
+          class="sidebar-item"
+          :class="{ active: mainTab === 'engines' }"
+          @click="mainTab = 'engines'"
+        >
+          <span class="sidebar-item-icon">⚙</span>
+          Engines
+        </button>
+        <button
+          class="sidebar-item"
+          :class="{ active: mainTab === 'benchmarks' }"
+          @click="mainTab = 'benchmarks'"
+        >
+          <span class="sidebar-item-icon">📊</span>
+          Benchmarks
+        </button>
+        <button
+          class="sidebar-item"
+          :class="{ active: mainTab === 'admin' }"
+          @click="mainTab = 'admin'"
+        >
+          <span class="sidebar-item-icon">🔧</span>
+          Admin
+        </button>
+      </div>
+
+      <!-- Host list shown in sidebar when Admin tab is active -->
+      <template v-if="mainTab === 'admin' && hosts.length">
+        <div class="sidebar-divider"></div>
+        <p class="sidebar-section-label">Hosts</p>
+        <div class="sidebar-hosts">
+          <button
+            v-for="host in hosts"
+            :key="host.id"
+            class="sidebar-host-item"
+            :class="{ active: host.id === configHostId }"
+            @click="selectHost(host)"
+          >
+            <span class="sidebar-host-dot"></span>
+            {{ host.name }}
+          </button>
+        </div>
+      </template>
     </nav>
 
-    <EnginesView
-      v-if="mainTab === 'engines'"
-      :hosts="hosts"
-      :engine-count="engineCount"
-      :engines="engines"
-      :engines-by-host="enginesByHost"
-      :engine-results-by-host="engineResultsByHost"
-      :hardware-by-host="hardwareByHost"
-      :hardware-errors-by-host="hardwareErrorsByHost"
-      :errors="errors"
-      :loading="loading"
-      @refresh="refreshAll"
-      @open-detail="openDetailModal"
-      @start-engine="(engine) => startEngine(engine, refreshAll)"
-      @stop-engine="(engine) => stopEngine(engine, refreshAll)"
-      @open-benchmark="openBenchmarkModal"
-    />
+    <!-- Main content area -->
+    <main class="content-area">
+      <EnginesView
+        v-if="mainTab === 'engines'"
+        :hosts="hosts"
+        :engine-count="engineCount"
+        :engines="engines"
+        :engines-by-host="enginesByHost"
+        :engine-results-by-host="engineResultsByHost"
+        :hardware-by-host="hardwareByHost"
+        :hardware-errors-by-host="hardwareErrorsByHost"
+        :errors="errors"
+        :loading="loading"
+        @open-detail="openDetailModal"
+        @start-engine="(engine) => startEngine(engine, refreshAll)"
+        @stop-engine="(engine) => stopEngine(engine, refreshAll)"
+        @open-benchmark="openBenchmarkModal"
+      />
 
-    <BenchmarksView
-      v-if="mainTab === 'benchmarks'"
-      :records="benchmarkRecords"
-      :errors="benchmarkErrors"
-      :loading="benchmarkLoading"
-      @refresh="loadBenchmarks"
-    />
+      <BenchmarksView
+        v-if="mainTab === 'benchmarks'"
+        :records="benchmarkRecords"
+        :errors="benchmarkErrors"
+        :loading="benchmarkLoading"
+        @refresh="loadBenchmarks"
+      />
 
-    <AdminView
-      v-if="mainTab === 'admin'"
-      :hosts="hosts"
-      :selected-host="selectedHost"
-      :selected-host-id="configHostId"
-      :configs="configs"
-      :images="images"
-      :host-errors="hostErrors"
-      :config-errors="configErrors"
-      :image-errors="imageErrors"
-      @open-host-modal="openHostModal"
-      @select-host="selectHost"
-      @open-config-modal="handleOpenConfigModal"
-      @open-config-template-modal="handleOpenConfigTemplateModal"
-      @open-image-modal="handleOpenImageModal"
-    />
+      <AdminView
+        v-if="mainTab === 'admin'"
+        :hosts="hosts"
+        :selected-host="selectedHost"
+        :selected-host-id="configHostId"
+        :configs="configs"
+        :images="images"
+        :host-errors="hostErrors"
+        :config-errors="configErrors"
+        :image-errors="imageErrors"
+        @open-host-modal="openHostModal"
+        @select-host="selectHost"
+        @open-config-modal="handleOpenConfigModal"
+        @open-config-template-modal="handleOpenConfigTemplateModal"
+        @open-image-modal="handleOpenImageModal"
+      />
+    </main>
+  </div>
 
-    <EngineDetailModal
-      :show="showDetailModal"
-      :engine="selected"
-      :logs="logs"
-      :log-history="logHistory"
-      :log-sessions="logSessions"
-      :selected-session-id="selectedSessionId"
-      :current-session-id="currentSessionId"
-      @close="closeDetailModal"
-      @select-current-session="selectCurrentSession"
-      @refresh-sessions="loadLogSessions(selected)"
-      @update:selected-session-id="onSessionIdChange"
-    />
+  <!-- Modals are position:fixed so grid placement is irrelevant -->
+  <EngineDetailModal
+    :show="showDetailModal"
+    :engine="selected"
+    :logs="logs"
+    :log-history="logHistory"
+    :log-sessions="logSessions"
+    :selected-session-id="selectedSessionId"
+    :current-session-id="currentSessionId"
+    @close="closeDetailModal"
+    @select-current-session="selectCurrentSession"
+    @refresh-sessions="loadLogSessions(selected)"
+    @update:selected-session-id="onSessionIdChange"
+  />
 
-    <HostModal
-      :show="showHostModal"
-      :mode="hostMode"
-      :form="hostForm"
-      :errors="hostErrors"
-      @close="closeHostModal"
-      @submit="saveHost(handleRefreshAfterHostSave)"
-      @delete="deleteHostFromModal(refreshAll)"
-    />
+  <HostModal
+    :show="showHostModal"
+    :mode="hostMode"
+    :form="hostForm"
+    :errors="hostErrors"
+    @close="closeHostModal"
+    @submit="saveHost(handleRefreshAfterHostSave)"
+    @delete="deleteHostFromModal(refreshAll)"
+  />
 
-    <ConfigModal
-      :show="showConfigModal"
-      :mode="configMode"
-      :form="configForm"
-      :errors="configErrors"
-      :images="images"
-      :model-artifacts="modelArtifacts"
-      :show-model-picker="showModelPicker"
-      :model-picker-options="modelPickerOptions"
-      :model-picker-title="modelPickerTitle"
-      v-model:model-picker-query="modelPickerQuery"
-      v-model:vllm-args-form="vllmArgsForm"
-      v-model:llama-cpp-args-form="llamaCppArgsForm"
-      v-model:fastllm-args-form="fastllmArgsForm"
-      v-model:k-transformers-args-form="kTransformersArgsForm"
-      v-model:custom-args-form="customArgsForm"
-      v-model:docker-engine-form="dockerEngineForm"
-      @close="closeConfigModal"
-      @submit="saveConfig(configHostId, images, onConfigSaved)"
-      @delete="deleteConfigFromModal(configHostId, onConfigSaved)"
-      @open-model-picker="openModelPicker"
-      @close-model-picker="closeModelPicker"
-      @select-model="selectModelFromPicker"
-    />
+  <ConfigModal
+    :show="showConfigModal"
+    :mode="configMode"
+    :form="configForm"
+    :errors="configErrors"
+    :images="images"
+    :model-artifacts="modelArtifacts"
+    :show-model-picker="showModelPicker"
+    :model-picker-options="modelPickerOptions"
+    :model-picker-title="modelPickerTitle"
+    v-model:model-picker-query="modelPickerQuery"
+    v-model:vllm-args-form="vllmArgsForm"
+    v-model:llama-cpp-args-form="llamaCppArgsForm"
+    v-model:fastllm-args-form="fastllmArgsForm"
+    v-model:k-transformers-args-form="kTransformersArgsForm"
+    v-model:custom-args-form="customArgsForm"
+    v-model:docker-engine-form="dockerEngineForm"
+    @close="closeConfigModal"
+    @submit="saveConfig(configHostId, images, onConfigSaved)"
+    @delete="deleteConfigFromModal(configHostId, onConfigSaved)"
+    @open-model-picker="openModelPicker"
+    @close-model-picker="closeModelPicker"
+    @select-model="selectModelFromPicker"
+  />
 
-    <ImageModal
-      :show="showImageModal"
-      :mode="imageMode"
-      v-model="imageForm"
-      :errors="imageErrors"
-      @close="closeImageModal"
-      @submit="saveImage(configHostId)"
-      @delete="deleteImageFromModal(configHostId)"
-    />
-  </main>
+  <ImageModal
+    :show="showImageModal"
+    :mode="imageMode"
+    v-model="imageForm"
+    :errors="imageErrors"
+    @close="closeImageModal"
+    @submit="saveImage(configHostId)"
+    @delete="deleteImageFromModal(configHostId)"
+  />
 </template>
 
 <script setup lang="ts">
@@ -275,6 +326,18 @@ const configHostId = ref<string | null>(null);
 
 const selectedHost = computed(() =>
   hosts.value.find((host) => host.id === configHostId.value) ?? null
+);
+
+// ── status counts (topbar chips) ─────────────────────────────────────────────
+
+const runningCount = computed(() =>
+  engines.value.filter((e) => e.instance.status === "Running").length
+);
+const stoppedCount = computed(() =>
+  engines.value.filter((e) => e.instance.status === "Stopped").length
+);
+const startingCount = computed(() =>
+  engines.value.filter((e) => e.instance.status === "Starting").length
 );
 
 // ── watches ──────────────────────────────────────────────────────────────────
