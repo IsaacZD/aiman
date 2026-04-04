@@ -7,48 +7,32 @@
       </div>
     </div>
 
-    <div class="admin-grid">
-      <div class="admin-pane">
-        <div class="pane-head">
-          <div class="pane-title">
-            <h3>Hosts</h3>
-            <button class="secondary" @click="$emit('open-host-modal')">New host</button>
-          </div>
-          <p class="panel-sub">Pick a host to manage configs.</p>
-        </div>
-        <div v-if="hostErrors.length" class="alert">
-          <p v-for="error in hostErrors" :key="error">{{ error }}</p>
-        </div>
-        <div class="host-list">
-          <article
-            v-for="host in hosts"
-            :key="host.id"
-            class="host-card clickable"
-            :class="{ active: host.id === selectedHostId }"
-            @click="$emit('select-host', host)"
-          >
-            <div>
-              <h3>{{ host.name }}</h3>
-              <p class="host-meta">{{ host.id }} • {{ host.base_url }}</p>
-            </div>
-            <div class="host-actions">
-              <button class="secondary" @click.stop="$emit('open-host-modal', host)">Edit</button>
-            </div>
-          </article>
-          <p v-if="!hosts.length" class="empty">No hosts yet.</p>
-        </div>
+    <div v-if="hostErrors.length" class="alert">
+      <p v-for="error in hostErrors" :key="error">{{ error }}</p>
+    </div>
+
+    <p v-if="!selectedHost" class="empty">Select a host from the sidebar to manage its configs and images.</p>
+
+    <template v-else>
+      <!-- Tab bar with inline action button -->
+      <div class="admin-tabs">
+        <button class="tab" :class="{ active: adminTab === 'configs' }" @click="adminTab = 'configs'">
+          Configs
+        </button>
+        <button class="tab" :class="{ active: adminTab === 'images' }" @click="adminTab = 'images'">
+          Images
+        </button>
+        <div class="admin-tabs-spacer"></div>
+        <button v-if="adminTab === 'configs'" class="secondary" @click="$emit('open-config-modal')">
+          New config
+        </button>
+        <button v-if="adminTab === 'images'" class="secondary" @click="$emit('open-image-modal')">
+          New image
+        </button>
       </div>
 
-      <div v-if="selectedHost" class="admin-pane">
-        <div class="pane-head">
-          <div class="pane-title">
-            <h3>Configs</h3>
-            <button class="secondary" @click="$emit('open-config-modal')">New config</button>
-          </div>
-          <p class="panel-sub">
-            {{ selectedHost ? `${selectedHost.name} • ${selectedHost.id}` : "Select a host." }}
-          </p>
-        </div>
+      <!-- Configs tab -->
+      <div v-if="adminTab === 'configs'">
         <div v-if="configErrors.length" class="alert">
           <p v-for="error in configErrors" :key="error">{{ error }}</p>
         </div>
@@ -70,16 +54,8 @@
         </div>
       </div>
 
-      <div v-if="selectedHost" class="admin-pane">
-        <div class="pane-head">
-          <div class="pane-title">
-            <h3>Images</h3>
-            <button class="secondary" @click="$emit('open-image-modal')">New image</button>
-          </div>
-          <p class="panel-sub">
-            {{ selectedHost ? `${selectedHost.name} • ${selectedHost.id}` : "Select a host." }}
-          </p>
-        </div>
+      <!-- Images tab -->
+      <div v-if="adminTab === 'images'">
         <div v-if="imageErrors.length" class="alert">
           <p v-for="error in imageErrors" :key="error">{{ error }}</p>
         </div>
@@ -97,17 +73,16 @@
           <p v-if="!images.length" class="empty">No images yet.</p>
         </div>
       </div>
-    </div>
+    </template>
   </section>
 </template>
 
 <script setup lang="ts">
+import { ref, watch } from "vue";
 import type { Host, EngineConfig, DockerImage } from "../types";
 
-defineProps<{
-  hosts: Host[];
+const props = defineProps<{
   selectedHost: Host | null;
-  selectedHostId: string | null;
   configs: EngineConfig[];
   images: DockerImage[];
   hostErrors: string[];
@@ -116,10 +91,18 @@ defineProps<{
 }>();
 
 defineEmits<{
-  (e: "open-host-modal", host?: Host): void;
-  (e: "select-host", host: Host): void;
   (e: "open-config-modal", config?: EngineConfig): void;
   (e: "open-config-template-modal", config: EngineConfig): void;
   (e: "open-image-modal", image?: DockerImage): void;
 }>();
+
+const adminTab = ref<"configs" | "images">("configs");
+
+// Reset to configs tab when switching to a different host.
+watch(
+  () => props.selectedHost?.id,
+  () => {
+    adminTab.value = "configs";
+  }
+);
 </script>

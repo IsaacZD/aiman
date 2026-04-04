@@ -62,20 +62,33 @@
       </div>
 
       <!-- Host list shown in sidebar when Admin tab is active -->
-      <template v-if="mainTab === 'admin' && hosts.length">
+      <template v-if="mainTab === 'admin'">
         <div class="sidebar-divider"></div>
-        <p class="sidebar-section-label">Hosts</p>
+        <div class="sidebar-section-header">
+          <span class="sidebar-section-label">Hosts</span>
+          <button class="sidebar-new-btn" @click="openHostModal()">+ New</button>
+        </div>
         <div class="sidebar-hosts">
-          <button
+          <div
             v-for="host in hosts"
             :key="host.id"
-            class="sidebar-host-item"
-            :class="{ active: host.id === configHostId }"
-            @click="selectHost(host)"
+            class="sidebar-host-row"
           >
-            <span class="sidebar-host-dot"></span>
-            {{ host.name }}
-          </button>
+            <button
+              class="sidebar-host-item"
+              :class="{ active: host.id === configHostId }"
+              @click="selectHost(host)"
+            >
+              <span class="sidebar-host-dot"></span>
+              {{ host.name }}
+            </button>
+            <button
+              class="sidebar-host-edit"
+              @click.stop="openHostModal(host)"
+              title="Edit host"
+            >✎</button>
+          </div>
+          <p v-if="!hosts.length" class="sidebar-empty">No hosts yet.</p>
         </div>
       </template>
     </nav>
@@ -109,16 +122,12 @@
 
       <AdminView
         v-if="mainTab === 'admin'"
-        :hosts="hosts"
         :selected-host="selectedHost"
-        :selected-host-id="configHostId"
         :configs="configs"
         :images="images"
         :host-errors="hostErrors"
         :config-errors="configErrors"
         :image-errors="imageErrors"
-        @open-host-modal="openHostModal"
-        @select-host="selectHost"
         @open-config-modal="handleOpenConfigModal"
         @open-config-template-modal="handleOpenConfigTemplateModal"
         @open-image-modal="handleOpenImageModal"
