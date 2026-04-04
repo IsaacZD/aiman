@@ -23,7 +23,15 @@ type EngineConfig = {
   id: string;
   name: string;
   // Keep in sync with crates/shared EngineType (string values serialized over the wire).
-  engine_type: "Vllm" | "LlamaCpp" | "ik_llamacpp" | "Lvllm" | "fastllm" | "KTransformers" | "Custom";
+  engine_type:
+    | "Vllm"
+    | "LlamaCpp"
+    | "ik_llamacpp"
+    | "Lvllm"
+    | "fastllm"
+    | "KTransformers"
+    | "Custom"
+    | "Docker";
   command: string;
   args: string[];
   env: { key: string; value: string }[];
@@ -33,6 +41,45 @@ type EngineConfig = {
     max_retries: number;
     backoff_secs: number;
   };
+  docker?: {
+    container_name?: string | null;
+    image_id: string;
+    extra_ports?: string[];
+    extra_volumes?: string[];
+    extra_env?: { key: string; value: string }[];
+    extra_run_args?: string[];
+    workdir?: string | null;
+    user?: string | null;
+    command?: string | null;
+    args?: string[];
+    pull?: boolean | null;
+    remove?: boolean | null;
+  } | null;
+};
+
+type DockerImage = {
+  id: string;
+  name: string;
+  image: string;
+  ports: string[];
+  volumes: string[];
+  env: { key: string; value: string }[];
+  run_args: string[];
+  workdir?: string | null;
+  user?: string | null;
+  command?: string | null;
+  args: string[];
+  pull: boolean;
+  remove: boolean;
+  build?: {
+    context?: string | null;
+    dockerfile?: string | null;
+    dockerfile_content?: string | null;
+    target?: string | null;
+    build_args?: { key: string; value: string }[];
+    pull?: boolean;
+    no_cache?: boolean;
+  } | null;
 };
 
 type EngineInstance = {
@@ -260,6 +307,77 @@ server.get("/api/hosts/:hostId/configs", async (request, reply) => {
   }
 
   const res = await fetch(`${host.base_url}/v1/configs`, {
+    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
+  });
+  const body = await safeJson(res);
+  return reply.code(res.status).send(body ?? { ok: res.ok });
+});
+
+// Proxy docker image list for a selected host.
+server.get("/api/hosts/:hostId/images", async (request, reply) => {
+  const { hostId } = request.params as { hostId: string };
+  const host = await findHost(hostId);
+  if (!host) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+
+  const res = await fetch(`${host.base_url}/v1/images`, {
+    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
+  });
+  const body = await safeJson(res);
+  return reply.code(res.status).send(body ?? { ok: res.ok });
+});
+
+// Create docker image template on a host.
+server.post("/api/hosts/:hostId/images", async (request, reply) => {
+  const { hostId } = request.params as { hostId: string };
+  const host = await findHost(hostId);
+  if (!host) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+
+  const res = await fetch(`${host.base_url}/v1/images`, {
+    method: "POST",
+    headers: {
+      ...(host.api_key ? { Authorization: `Bearer ${host.api_key}` } : {}),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(request.body ?? {})
+  });
+  const body = await safeJson(res);
+  return reply.code(res.status).send(body ?? { ok: res.ok });
+});
+
+// Update docker image template on a host.
+server.put("/api/hosts/:hostId/images/:imageId", async (request, reply) => {
+  const { hostId, imageId } = request.params as { hostId: string; imageId: string };
+  const host = await findHost(hostId);
+  if (!host) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+
+  const res = await fetch(`${host.base_url}/v1/images/${encodeURIComponent(imageId)}`, {
+    method: "PUT",
+    headers: {
+      ...(host.api_key ? { Authorization: `Bearer ${host.api_key}` } : {}),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(request.body ?? {})
+  });
+  const body = await safeJson(res);
+  return reply.code(res.status).send(body ?? { ok: res.ok });
+});
+
+// Delete docker image template on a host.
+server.delete("/api/hosts/:hostId/images/:imageId", async (request, reply) => {
+  const { hostId, imageId } = request.params as { hostId: string; imageId: string };
+  const host = await findHost(hostId);
+  if (!host) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+
+  const res = await fetch(`${host.base_url}/v1/images/${encodeURIComponent(imageId)}`, {
+    method: "DELETE",
     headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
   });
   const body = await safeJson(res);
@@ -667,11 +785,16 @@ async function runDashboardBenchmark(
     fetchHardware(host)
   ]);
 
+  const image =
+    config.engine_type === "Docker" && config.docker?.image_id
+      ? await fetchImage(host, config.docker.image_id)
+      : null;
+
   if (instance.status !== "Running") {
     throw new Error(`engine is not running (status ${instance.status})`);
   }
 
-  const resolved = await normalizeBenchmarkSettings(config, host, settingsPayload);
+  const resolved = await normalizeBenchmarkSettings(config, host, settingsPayload, image ?? undefined);
   const results: BenchmarkResult[] = [];
   for (const concurrency of resolved.concurrency) {
     const result = await runBenchmarkConcurrency(resolved, concurrency);
@@ -716,6 +839,17 @@ async function fetchConfig(host: HostConfig, engineId: string): Promise<EngineCo
   return config;
 }
 
+async function fetchImage(host: HostConfig, imageId: string): Promise<DockerImage | null> {
+  const res = await fetch(`${host.base_url}/v1/images/${encodeURIComponent(imageId)}`, {
+    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
+  });
+  if (!res.ok) {
+    return null;
+  }
+  const body = (await res.json()) as { image?: DockerImage };
+  return body.image ?? null;
+}
+
 async function fetchInstance(host: HostConfig, engineId: string): Promise<EngineInstance> {
   const res = await fetch(`${host.base_url}/v1/engines/${engineId}`, {
     headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
@@ -754,7 +888,8 @@ type NormalizedBenchmarkSettings = {
 async function normalizeBenchmarkSettings(
   config: EngineConfig,
   host: HostConfig,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  image?: DockerImage
 ): Promise<NormalizedBenchmarkSettings> {
   const concurrency = parseConcurrency(payload.concurrency).filter((value) => value > 0);
   const resolvedConcurrency = concurrency.length ? concurrency : [1, 2, 4, 8];
@@ -770,7 +905,7 @@ async function normalizeBenchmarkSettings(
   const apiBaseUrl =
     typeof payload.api_base_url === "string" && payload.api_base_url.trim().length
       ? normalizeBaseUrl(payload.api_base_url)
-      : inferApiBase(config, host);
+      : inferApiBase(config, host, image);
   if (!apiBaseUrl) {
     throw new Error("unable to infer engine API base URL");
   }
@@ -991,10 +1126,22 @@ function normalizeBaseUrl(value: string) {
   return trimmed;
 }
 
-function inferApiBase(config: EngineConfig, host: HostConfig) {
+function inferApiBase(config: EngineConfig, host: HostConfig, image?: DockerImage) {
+  const dockerArgs = config.docker?.args ?? [];
+  const dockerPorts = [
+    ...(image?.ports ?? []),
+    ...(config.docker?.extra_ports ?? [])
+  ];
   const hostValue =
-    parseArgValue(config.args, "--host") ?? parseArgValue(config.args, "--bind") ?? "127.0.0.1";
-  const portValue = parseArgValue(config.args, "--port");
+    parseArgValue(dockerArgs, "--host") ??
+    parseArgValue(dockerArgs, "--bind") ??
+    parseArgValue(config.args, "--host") ??
+    parseArgValue(config.args, "--bind") ??
+    "127.0.0.1";
+  const portValue =
+    parseArgValue(dockerArgs, "--port") ??
+    parseArgValue(config.args, "--port") ??
+    parseDockerHostPort(dockerPorts);
   const port = portValue ? Number(portValue) : defaultPort(config.engine_type);
   if (!Number.isFinite(port)) {
     return null;
@@ -1020,6 +1167,31 @@ function parseArgValue(args: string[], key: string) {
     }
   }
   return null;
+}
+
+function parseDockerHostPort(ports: string[]) {
+  for (const mapping of ports) {
+    const port = parseDockerPortMapping(mapping);
+    if (port) {
+      return String(port);
+    }
+  }
+  return null;
+}
+
+function parseDockerPortMapping(mapping: string) {
+  const trimmed = mapping.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const noProto = trimmed.split("/")[0] ?? trimmed;
+  const parts = noProto.split(":");
+  const hostPort = parts.length >= 2 ? parts[parts.length - 2] : parts[0];
+  const parsed = Number(hostPort);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return parsed;
 }
 
 function defaultPort(engineType: EngineConfig["engine_type"]) {

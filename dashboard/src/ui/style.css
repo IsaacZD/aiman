@@ -551,6 +551,13 @@ h2 {
   cursor: default;
 }
 
+.config-form input:disabled,
+.engine-fields input:disabled,
+.engine-fields select:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 .config-id-label {
   flex-direction: row;
   align-items: center;
@@ -628,6 +635,7 @@ h2 {
 }
 
 .engine-fields input,
+.engine-fields select,
 .engine-fields textarea {
   padding: 8px 10px;
   border-radius: 12px;
@@ -636,6 +644,37 @@ h2 {
   font-size: 0.95rem;
   background: rgba(8, 12, 20, 0.9);
   color: var(--ink);
+}
+
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.field-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .model-input-row {
@@ -676,7 +715,7 @@ h2 {
 
 .admin-grid {
   display: grid;
-  grid-template-columns: minmax(240px, 0.9fr) minmax(320px, 1.4fr);
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 20px;
 }
 

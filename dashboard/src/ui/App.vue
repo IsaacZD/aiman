@@ -300,6 +300,34 @@
             <p v-if="!configs.length" class="empty">No configs yet.</p>
           </div>
         </div>
+
+        <div v-if="selectedHost" class="admin-pane">
+          <div class="pane-head">
+            <div class="pane-title">
+              <h3>Images</h3>
+              <button class="secondary" @click="openImageModal()">New image</button>
+            </div>
+            <p class="panel-sub">
+              {{ selectedHost ? `${selectedHost.name} • ${selectedHost.id}` : "Select a host." }}
+            </p>
+          </div>
+          <div v-if="imageErrors.length" class="alert">
+            <p v-for="error in imageErrors" :key="error">{{ error }}</p>
+          </div>
+          <div class="config-list">
+            <article v-for="image in images" :key="image.id" class="config-card">
+              <div>
+                <h3>{{ image.name || image.id }}</h3>
+                <p class="config-meta">{{ image.image }}</p>
+                <p class="config-meta config-id">{{ image.id }}</p>
+              </div>
+              <div class="config-actions">
+                <button class="secondary" @click="openImageModal(image)">Edit</button>
+              </div>
+            </article>
+            <p v-if="!images.length" class="empty">No images yet.</p>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -431,12 +459,17 @@
               <option value="ik_llamacpp">ik_llamacpp</option>
               <option value="fastllm">fastllm</option>
               <option value="KTransformers">KTransformers</option>
+              <option value="Docker">Docker</option>
               <option value="Custom">Custom</option>
             </select>
           </label>
           <label>
-            Command
-            <input v-model="configForm.command" type="text" placeholder="/opt/vllm/serve" />
+            {{ configForm.engine_type === "Docker" ? "Container runtime" : "Command" }}
+            <input
+              v-model="configForm.command"
+              type="text"
+              :placeholder="configForm.engine_type === 'Docker' ? 'docker' : '/opt/vllm/serve'"
+            />
           </label>
           <div class="engine-fields-panel">
             <VllmConfigFields
@@ -473,9 +506,14 @@
                 (onSelect) => openModelPicker(ggufModelOptions, 'Select GGUF model', onSelect)
               "
             />
+            <DockerConfigFields
+              v-else-if="configForm.engine_type === 'Docker'"
+              v-model="dockerEngineForm"
+              :images="images"
+            />
             <CustomConfigFields v-else v-model="customArgsForm" />
           </div>
-          <label>
+          <label v-if="configForm.engine_type !== 'Docker'">
             Environment variables
             <EnvVarListEditor v-model="configForm.envEntries" />
           </label>
@@ -508,6 +546,34 @@
             </button>
             <button class="primary" type="submit">
               {{ configMode === "create" ? "Create config" : "Save changes" }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div v-if="showImageModal" class="modal-backdrop">
+      <div class="modal modal-wide">
+        <div class="modal-head">
+          <h3>{{ imageMode === "create" ? "Create image" : "Edit image" }}</h3>
+          <button class="ghost" @click="closeImageModal">Close</button>
+        </div>
+        <div v-if="imageErrors.length" class="alert">
+          <p v-for="error in imageErrors" :key="error">{{ error }}</p>
+        </div>
+        <form class="config-form" @submit.prevent="saveImage">
+          <DockerImageFields v-model="imageForm" :id-locked="imageMode === 'edit'" />
+          <div class="form-actions">
+            <button
+              v-if="imageMode === 'edit'"
+              class="ghost"
+              type="button"
+              @click="deleteImageFromModal"
+            >
+              Delete
+            </button>
+            <button class="primary" type="submit">
+              {{ imageMode === "create" ? "Create image" : "Save changes" }}
             </button>
           </div>
         </form>
@@ -639,6 +705,8 @@ import LlamaCppConfigFields from "./components/LlamaCppConfigFields.vue";
 import FastllmConfigFields from "./components/FastllmConfigFields.vue";
 import KTransformersConfigFields from "./components/KTransformersConfigFields.vue";
 import CustomConfigFields from "./components/CustomConfigFields.vue";
+import DockerConfigFields from "./components/DockerConfigFields.vue";
+import DockerImageFields from "./components/DockerImageFields.vue";
 import EnvVarListEditor from "./components/EnvVarListEditor.vue";
 import {
   buildVllmArgs,
@@ -665,6 +733,7 @@ import {
   createCustomArgsForm,
   parseCustomArgs
 } from "./engine-args/custom";
+import { createDockerEngineForm, createDockerImageForm } from "./engine-args/docker";
 
 type Host = {
   id: string;
@@ -690,7 +759,8 @@ type EngineConfig = {
     | "Lvllm"
     | "fastllm"
     | "KTransformers"
-    | "Custom";
+    | "Custom"
+    | "Docker";
   command: string;
   args: string[];
   env: EnvVar[];
@@ -700,6 +770,45 @@ type EngineConfig = {
     max_retries: number;
     backoff_secs: number;
   };
+  docker?: {
+    container_name?: string | null;
+    image_id: string;
+    extra_ports?: string[];
+    extra_volumes?: string[];
+    extra_env?: EnvVar[];
+    extra_run_args?: string[];
+    workdir?: string | null;
+    user?: string | null;
+    command?: string | null;
+    args?: string[];
+    pull?: boolean | null;
+    remove?: boolean | null;
+  } | null;
+};
+
+type DockerImage = {
+  id: string;
+  name: string;
+  image: string;
+  ports: string[];
+  volumes: string[];
+  env: EnvVar[];
+  run_args: string[];
+  workdir?: string | null;
+  user?: string | null;
+  command?: string | null;
+  args: string[];
+  pull: boolean;
+  remove: boolean;
+  build?: {
+    context?: string | null;
+    dockerfile?: string | null;
+    dockerfile_content?: string | null;
+    target?: string | null;
+    build_args?: EnvVar[];
+    pull?: boolean;
+    no_cache?: boolean;
+  } | null;
 };
 
 type EngineInstance = {
@@ -838,11 +947,18 @@ const configErrors = ref<string[]>([]);
 const configMode = ref<"create" | "edit">("create");
 const configForm = ref(createEmptyConfigForm());
 const configOriginalId = ref<string | null>(null);
+const images = ref<DockerImage[]>([]);
+const imageErrors = ref<string[]>([]);
+const imageMode = ref<"create" | "edit">("create");
+const imageForm = ref(createDockerImageForm());
+const imageOriginalId = ref<string | null>(null);
+const showImageModal = ref(false);
 const vllmArgsForm = ref(createVllmArgsForm());
 const llamaCppArgsForm = ref(createLlamaCppArgsForm());
 const fastllmArgsForm = ref(createFastllmArgsForm());
 const kTransformersArgsForm = ref(createKTransformersArgsForm());
 const customArgsForm = ref(createCustomArgsForm());
+const dockerEngineForm = ref(createDockerEngineForm());
 const showConfigModal = ref(false);
 const showModelPicker = ref(false);
 const modelPickerOptions = ref<ModelArtifact[]>([]);
@@ -951,7 +1067,8 @@ const defaultCommands: Record<EngineConfig["engine_type"], string> = {
   ik_llamacpp: "ikllama-server",
   fastllm: "ftllm serve",
   KTransformers: "ktransformers-server",
-  Custom: ""
+  Custom: "",
+  Docker: "docker"
 };
 
 const lastEngineType = ref<EngineConfig["engine_type"]>(configForm.value.engine_type);
@@ -1506,6 +1623,13 @@ function generateHostId() {
   return `host-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function generateImageId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 async function loadConfigs(): Promise<EngineConfig[]> {
   configErrors.value = [];
   if (!configHostId.value) {
@@ -1525,6 +1649,31 @@ async function loadConfigs(): Promise<EngineConfig[]> {
     return configs.value;
   } catch (err) {
     configErrors.value = [(err as Error).message];
+    return [];
+  }
+}
+
+async function loadImages(): Promise<DockerImage[]> {
+  imageErrors.value = [];
+  if (!configHostId.value) {
+    images.value = [];
+    return [];
+  }
+
+  try {
+    const res = await fetch(`/api/hosts/${configHostId.value}/images`);
+    if (!res.ok) {
+      imageErrors.value = [`Failed to load images (HTTP ${res.status})`];
+      images.value = [];
+      return [];
+    }
+    const body = (await res.json()) as { images: DockerImage[] };
+    const next = body.images ?? [];
+    next.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+    images.value = next;
+    return images.value;
+  } catch (err) {
+    imageErrors.value = [(err as Error).message];
     return [];
   }
 }
@@ -1703,6 +1852,64 @@ function resetConfigForm() {
   fastllmArgsForm.value = createFastllmArgsForm();
   kTransformersArgsForm.value = createKTransformersArgsForm();
   customArgsForm.value = createCustomArgsForm();
+  dockerEngineForm.value = createDockerEngineForm();
+}
+
+function resetImageForm() {
+  imageMode.value = "create";
+  imageForm.value = {
+    ...createDockerImageForm(),
+    id: generateImageId()
+  };
+  imageOriginalId.value = null;
+}
+
+function openImageModal(image?: DockerImage) {
+  if (!configHostId.value) {
+    imageErrors.value = ["Select a host before creating an image."];
+    return;
+  }
+  if (image) {
+    editImage(image);
+  } else {
+    resetImageForm();
+  }
+  showImageModal.value = true;
+}
+
+function closeImageModal() {
+  showImageModal.value = false;
+  imageErrors.value = [];
+}
+
+function editImage(image: DockerImage) {
+  imageMode.value = "edit";
+  imageOriginalId.value = image.id;
+  imageForm.value = {
+    id: image.id,
+    name: image.name ?? "",
+    image: image.image ?? "",
+    ports: image.ports ? [...image.ports] : [],
+    volumes: image.volumes ? [...image.volumes] : [],
+    env: image.env ? [...image.env] : [],
+    run_args: image.run_args ? [...image.run_args] : [],
+    workdir: image.workdir ?? "",
+    user: image.user ?? "",
+    command: image.command ?? "",
+    args: image.args ? [...image.args] : [],
+    pull: Boolean(image.pull),
+    remove: image.remove !== false,
+    build: {
+      enabled: Boolean(image.build),
+      context: image.build?.context ?? "",
+      dockerfile: image.build?.dockerfile ?? "",
+      dockerfile_content: image.build?.dockerfile_content ?? "",
+      target: image.build?.target ?? "",
+      pull: Boolean(image.build?.pull),
+      no_cache: Boolean(image.build?.no_cache),
+      build_args: image.build?.build_args ? [...image.build.build_args] : []
+    }
+  };
 }
 
 function openBenchmarkModal(engine: EngineItem) {
@@ -1732,6 +1939,7 @@ function openConfigModal(config?: EngineConfig) {
     configForm.value.command = defaultCommands[configForm.value.engine_type];
   }
   loadModels();
+  loadImages();
   showConfigModal.value = true;
 }
 
@@ -1752,6 +1960,7 @@ function openConfigTemplateModal(config: EngineConfig) {
     configForm.value.command = defaultCommands[configForm.value.engine_type];
   }
   loadModels();
+  loadImages();
   showConfigModal.value = true;
 }
 
@@ -1791,12 +2000,16 @@ function editConfig(config: EngineConfig) {
     name: config.name,
     engine_type: config.engine_type,
     command: config.command,
-    envEntries: config.env.map((item) => ({ key: item.key, value: item.value })),
+    envEntries:
+      config.engine_type === "Docker"
+        ? []
+        : config.env.map((item) => ({ key: item.key, value: item.value })),
     working_dir: config.working_dir ?? "",
     auto_restart_enabled: config.auto_restart.enabled,
     auto_restart_max_retries: config.auto_restart.max_retries,
     auto_restart_backoff_secs: config.auto_restart.backoff_secs
   };
+  dockerEngineForm.value = createDockerEngineForm();
   // Parse args into the right template so the form mirrors existing configs.
   if (config.engine_type === "Vllm" || config.engine_type === "Lvllm") {
     vllmArgsForm.value = parseVllmArgs(config.args ?? []);
@@ -1806,6 +2019,25 @@ function editConfig(config: EngineConfig) {
     fastllmArgsForm.value = parseFastllmArgs(config.args ?? []);
   } else if (config.engine_type === "KTransformers") {
     kTransformersArgsForm.value = parseKTransformersArgs(config.args ?? []);
+  } else if (config.engine_type === "Docker") {
+    const docker = config.docker ?? null;
+    dockerEngineForm.value = {
+      image_id: docker?.image_id ?? "",
+      container_name: docker?.container_name ?? "",
+      extra_ports: docker?.extra_ports ? [...docker.extra_ports] : [],
+      extra_volumes: docker?.extra_volumes ? [...docker.extra_volumes] : [],
+      extra_env: docker?.extra_env
+        ? [...docker.extra_env, ...config.env]
+        : [...config.env],
+      extra_run_args: docker?.extra_run_args ? [...docker.extra_run_args] : [],
+      workdir: docker?.workdir ?? "",
+      user: docker?.user ?? "",
+      command: docker?.command ?? "",
+      args: docker?.args ? [...docker.args] : [],
+      pull_mode: docker?.pull === true ? "true" : docker?.pull === false ? "false" : "inherit",
+      remove_mode:
+        docker?.remove === true ? "true" : docker?.remove === false ? "false" : "inherit"
+    };
   } else {
     customArgsForm.value = parseCustomArgs(config.args ?? []);
   }
@@ -1825,11 +2057,16 @@ async function saveConfig() {
   if (!configForm.value.name.trim()) {
     errors.push("Display name is required.");
   }
-  if (!configForm.value.command.trim()) {
+  const isDocker = configForm.value.engine_type === "Docker";
+  if (!isDocker && !configForm.value.command.trim()) {
     errors.push("Command is required.");
   }
+  if (isDocker && !dockerEngineForm.value.image_id.trim()) {
+    errors.push("Docker image template is required.");
+  }
 
-  const envEntries = buildEnvEntries(configForm.value.envEntries, errors);
+  const envEntries = isDocker ? [] : buildEnvEntries(configForm.value.envEntries, errors);
+  const extraEnv = isDocker ? buildEnvEntries(dockerEngineForm.value.extra_env, errors) : [];
   if (errors.length) {
     configErrors.value = errors;
     return;
@@ -1848,15 +2085,35 @@ async function saveConfig() {
     args = buildFastllmArgs(fastllmArgsForm.value);
   } else if (configForm.value.engine_type === "KTransformers") {
     args = buildKTransformersArgs(kTransformersArgsForm.value);
+  } else if (configForm.value.engine_type === "Docker") {
+    args = [];
   } else {
     args = buildCustomArgs(customArgsForm.value);
   }
+
+  const runtimeCommand = configForm.value.command.trim() || (isDocker ? "docker" : "");
+  const dockerConfig = isDocker
+    ? {
+        image_id: dockerEngineForm.value.image_id.trim(),
+        container_name: dockerEngineForm.value.container_name.trim() || null,
+        extra_ports: cleanStringList(dockerEngineForm.value.extra_ports),
+        extra_volumes: cleanStringList(dockerEngineForm.value.extra_volumes),
+        extra_env: extraEnv,
+        extra_run_args: cleanStringList(dockerEngineForm.value.extra_run_args),
+        workdir: dockerEngineForm.value.workdir.trim() || null,
+        user: dockerEngineForm.value.user.trim() || null,
+        command: dockerEngineForm.value.command.trim() || null,
+        args: cleanStringList(dockerEngineForm.value.args),
+        pull: parseOverride(dockerEngineForm.value.pull_mode),
+        remove: parseOverride(dockerEngineForm.value.remove_mode)
+      }
+    : null;
 
   const config: EngineConfig = {
     id: configForm.value.id.trim(),
     name: configForm.value.name.trim(),
     engine_type: configForm.value.engine_type,
-    command: configForm.value.command,
+    command: runtimeCommand,
     args,
     env: envEntries,
     working_dir: configForm.value.working_dir.trim()
@@ -1866,7 +2123,8 @@ async function saveConfig() {
       enabled: configForm.value.auto_restart_enabled,
       max_retries: Number(configForm.value.auto_restart_max_retries) || 0,
       backoff_secs: Number(configForm.value.auto_restart_backoff_secs) || 5
-    }
+    },
+    ...(dockerConfig ? { docker: dockerConfig } : {})
   };
 
   const actionLabel = configMode.value === "create" ? "Create config" : "Save changes to config";
@@ -1985,6 +2243,139 @@ async function deleteConfigFromModal() {
   closeConfigModal();
 }
 
+async function saveImage() {
+  imageErrors.value = [];
+  if (!configHostId.value) {
+    imageErrors.value = ["Select a host before saving."];
+    return;
+  }
+
+  const errors: string[] = [];
+  const imageId = imageForm.value.id.trim();
+  if (!imageId) {
+    errors.push("Image ID is required.");
+  }
+  if (!imageForm.value.name.trim()) {
+    errors.push("Display name is required.");
+  }
+  if (!imageForm.value.image.trim()) {
+    errors.push("Image reference is required.");
+  }
+  if (imageForm.value.build.enabled && !imageForm.value.build.context.trim()) {
+    errors.push("Build context is required.");
+  }
+
+  const envEntries = buildEnvEntries(imageForm.value.env, errors);
+  const buildArgs = imageForm.value.build.enabled
+    ? buildEnvEntries(imageForm.value.build.build_args, errors)
+    : [];
+  if (errors.length) {
+    imageErrors.value = errors;
+    return;
+  }
+
+  if (
+    imageMode.value === "edit" &&
+    imageOriginalId.value &&
+    imageOriginalId.value !== imageId
+  ) {
+    imageErrors.value = ["Image ID cannot be changed."];
+    return;
+  }
+
+  const payload: DockerImage = {
+    id: imageId,
+    name: imageForm.value.name.trim(),
+    image: imageForm.value.image.trim(),
+    ports: cleanStringList(imageForm.value.ports),
+    volumes: cleanStringList(imageForm.value.volumes),
+    env: envEntries,
+    run_args: cleanStringList(imageForm.value.run_args),
+    workdir: imageForm.value.workdir.trim() || null,
+    user: imageForm.value.user.trim() || null,
+    command: imageForm.value.command.trim() || null,
+    args: cleanStringList(imageForm.value.args),
+    pull: Boolean(imageForm.value.pull),
+    remove: Boolean(imageForm.value.remove),
+    build: imageForm.value.build.enabled
+      ? {
+          context: imageForm.value.build.context.trim(),
+          dockerfile: imageForm.value.build.dockerfile.trim() || null,
+          dockerfile_content: imageForm.value.build.dockerfile_content.trim() || null,
+          target: imageForm.value.build.target.trim() || null,
+          build_args: buildArgs,
+          pull: Boolean(imageForm.value.build.pull),
+          no_cache: Boolean(imageForm.value.build.no_cache)
+        }
+      : null
+  };
+
+  const actionLabel = imageMode.value === "create" ? "Create image" : "Save changes to image";
+  if (!confirm(`${actionLabel} "${payload.name}"?`)) {
+    return;
+  }
+
+  const method = imageMode.value === "create" ? "POST" : "PUT";
+  const url =
+    imageMode.value === "create"
+      ? `/api/hosts/${configHostId.value}/images`
+      : `/api/hosts/${configHostId.value}/images/${encodeURIComponent(imageId)}`;
+
+  const parseError = async (res: Response) => {
+    const rawBody = await res.text().catch(() => "");
+    if (!rawBody) {
+      return `Save failed (HTTP ${res.status}).`;
+    }
+    try {
+      const parsed = JSON.parse(rawBody) as { error?: string; message?: string };
+      return `Save failed: ${parsed.error ?? parsed.message ?? rawBody}`;
+    } catch {
+      return `Save failed: ${rawBody}`;
+    }
+  };
+
+  const res = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    imageErrors.value = [await parseError(res)];
+    return;
+  }
+
+  closeImageModal();
+  resetImageForm();
+  await loadImages();
+}
+
+async function deleteImage(image: DockerImage) {
+  if (!configHostId.value) {
+    return;
+  }
+  if (!confirm(`Delete image "${image.name}"? This cannot be undone.`)) {
+    return;
+  }
+  const res = await fetch(
+    `/api/hosts/${configHostId.value}/images/${encodeURIComponent(image.id)}`,
+    { method: "DELETE" }
+  );
+  if (!res.ok) {
+    imageErrors.value = [`Delete failed (HTTP ${res.status}).`];
+    return;
+  }
+  await loadImages();
+}
+
+async function deleteImageFromModal() {
+  if (!imageForm.value.id.trim()) {
+    return;
+  }
+  await deleteImage({ id: imageForm.value.id, name: imageForm.value.name } as DockerImage);
+  closeImageModal();
+}
+
 function selectHost(host: Host) {
   if (configHostId.value === host.id) {
     return;
@@ -1992,6 +2383,7 @@ function selectHost(host: Host) {
   configHostId.value = host.id;
   loadConfigs();
   loadModels();
+  loadImages();
 }
 
 function buildEnvEntries(entries: EnvVar[], errors: string[]) {
@@ -2008,6 +2400,20 @@ function buildEnvEntries(entries: EnvVar[], errors: string[]) {
     cleaned.push({ key, value });
   }
   return cleaned;
+}
+
+function cleanStringList(entries: string[]) {
+  return entries.map((entry) => entry.trim()).filter(Boolean);
+}
+
+function parseOverride(value: "inherit" | "true" | "false") {
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  return null;
 }
 
 function parseConcurrency(input: string) {

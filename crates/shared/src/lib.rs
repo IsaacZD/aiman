@@ -17,6 +17,8 @@ pub struct EngineConfig {
     pub env: Vec<EnvVar>,
     pub working_dir: Option<String>,
     pub auto_restart: AutoRestart,
+    #[serde(default)]
+    pub docker: Option<DockerConfig>,
 }
 
 /// Environment variable injection for a process.
@@ -27,7 +29,7 @@ pub struct EnvVar {
 }
 
 /// Supported engine types (extend as needed).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EngineType {
     Vllm,
     LlamaCpp,
@@ -38,6 +40,7 @@ pub enum EngineType {
     Fastllm,
     KTransformers,
     Custom,
+    Docker,
 }
 
 /// Runtime status of an engine instance.
@@ -100,6 +103,76 @@ impl Default for AutoRestart {
             enabled: false,
             max_retries: 0,
             backoff_secs: 5,
+        }
+    }
+}
+
+/// Docker build settings for containerized engines.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct DockerBuild {
+    pub context: Option<String>,
+    pub dockerfile: Option<String>,
+    pub dockerfile_content: Option<String>,
+    pub target: Option<String>,
+    pub build_args: Vec<EnvVar>,
+    pub pull: bool,
+    pub no_cache: bool,
+}
+
+/// Stored image template shared across Docker-backed engine configs.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct DockerImage {
+    pub id: String,
+    pub name: String,
+    pub image: String,
+    pub ports: Vec<String>,
+    pub volumes: Vec<String>,
+    pub env: Vec<EnvVar>,
+    pub run_args: Vec<String>,
+    pub workdir: Option<String>,
+    pub user: Option<String>,
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub pull: bool,
+    pub remove: bool,
+    pub build: Option<DockerBuild>,
+}
+
+/// Docker runtime settings for containerized engines.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DockerConfig {
+    pub container_name: Option<String>,
+    pub image_id: String,
+    pub extra_ports: Vec<String>,
+    pub extra_volumes: Vec<String>,
+    pub extra_env: Vec<EnvVar>,
+    pub extra_run_args: Vec<String>,
+    pub workdir: Option<String>,
+    pub user: Option<String>,
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub pull: Option<bool>,
+    pub remove: Option<bool>,
+}
+
+impl Default for DockerConfig {
+    fn default() -> Self {
+        Self {
+            container_name: None,
+            image_id: String::new(),
+            extra_ports: Vec::new(),
+            extra_volumes: Vec::new(),
+            extra_env: Vec::new(),
+            extra_run_args: Vec::new(),
+            workdir: None,
+            user: None,
+            command: None,
+            args: Vec::new(),
+            pull: None,
+            remove: None,
         }
     }
 }

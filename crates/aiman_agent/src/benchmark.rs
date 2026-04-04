@@ -463,12 +463,36 @@ fn normalize_base_url(value: &str) -> Option<String> {
 }
 
 fn infer_api_base(config: &EngineConfig) -> Option<String> {
-    let mut host = parse_arg_value(&config.args, "--host")
-        .or_else(|| parse_arg_value(&config.args, "--bind"))
-        .unwrap_or_else(|| "127.0.0.1".to_string());
-    let port = parse_arg_value(&config.args, "--port")
-        .and_then(|value| value.parse::<u16>().ok())
-        .unwrap_or_else(|| default_port(&config.engine_type));
+    let (mut host, port) = if matches!(config.engine_type, EngineType::Docker) {
+        let docker_args = config
+            .docker
+            .as_ref()
+            .map(|docker| docker.args.as_slice())
+            .unwrap_or(&[]);
+        let host = parse_arg_value(docker_args, "--host")
+            .or_else(|| parse_arg_value(docker_args, "--bind"))
+            .or_else(|| parse_arg_value(&config.args, "--host"))
+            .or_else(|| parse_arg_value(&config.args, "--bind"))
+            .unwrap_or_else(|| "127.0.0.1".to_string());
+        let port = parse_arg_value(docker_args, "--port")
+            .and_then(|value| value.parse::<u16>().ok())
+            .or_else(|| {
+                config
+                    .docker
+                    .as_ref()
+                    .and_then(|docker| parse_docker_host_port(&docker.extra_ports))
+            })
+            .unwrap_or_else(|| default_port(&config.engine_type));
+        (host, port)
+    } else {
+        let host = parse_arg_value(&config.args, "--host")
+            .or_else(|| parse_arg_value(&config.args, "--bind"))
+            .unwrap_or_else(|| "127.0.0.1".to_string());
+        let port = parse_arg_value(&config.args, "--port")
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or_else(|| default_port(&config.engine_type));
+        (host, port)
+    };
     if host == "0.0.0.0" || host == "::" {
         host = "127.0.0.1".to_string();
     }
@@ -496,6 +520,34 @@ fn default_port(engine_type: &EngineType) -> u16 {
         // vLLM + most others default to 8000.
         _ => 8000,
     }
+}
+
+fn parse_docker_host_port(ports: &[String]) -> Option<u16> {
+    for mapping in ports {
+        if let Some(port) = parse_docker_port_mapping(mapping) {
+            return Some(port);
+        }
+    }
+    None
+}
+
+fn parse_docker_port_mapping(mapping: &str) -> Option<u16> {
+    let trimmed = mapping.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let no_proto = trimmed
+        .split('/')
+        .next()
+        .unwrap_or(trimmed)
+        .trim();
+    let parts: Vec<&str> = no_proto.split(':').collect();
+    let host_port = if parts.len() >= 2 {
+        parts.get(parts.len() - 2).copied()
+    } else {
+        parts.first().copied()
+    }?;
+    host_port.trim().parse::<u16>().ok()
 }
 
 fn generate_prompt(words: usize) -> String {

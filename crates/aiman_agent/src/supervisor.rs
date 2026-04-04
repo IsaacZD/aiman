@@ -5,9 +5,10 @@ use std::{
     time::Duration,
 };
 
+use anyhow::Context;
 use aiman_shared::{
-    AutoRestart, EngineConfig, EngineInstance, EngineStatus, EngineType, LogEntry, LogSession,
-    LogStream,
+    AutoRestart, DockerBuild, DockerConfig, DockerImage, EngineConfig, EngineInstance, EngineStatus,
+    EngineType, LogEntry, LogSession, LogStream,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -35,6 +36,14 @@ pub enum SupervisorError {
     ConfigInUse,
     #[error("engine config invalid: {0}")]
     ConfigInvalid(String),
+    #[error("docker image already exists")]
+    ImageExists,
+    #[error("docker image in use")]
+    ImageInUse,
+    #[error("docker image not found")]
+    ImageNotFound,
+    #[error("docker image invalid: {0}")]
+    ImageInvalid(String),
 }
 
 pub fn map_supervisor_error(err: SupervisorError) -> axum::http::StatusCode {
@@ -45,6 +54,10 @@ pub fn map_supervisor_error(err: SupervisorError) -> axum::http::StatusCode {
         SupervisorError::ConfigExists => axum::http::StatusCode::CONFLICT,
         SupervisorError::ConfigInUse => axum::http::StatusCode::CONFLICT,
         SupervisorError::ConfigInvalid(_) => axum::http::StatusCode::BAD_REQUEST,
+        SupervisorError::ImageExists => axum::http::StatusCode::CONFLICT,
+        SupervisorError::ImageInUse => axum::http::StatusCode::CONFLICT,
+        SupervisorError::ImageNotFound => axum::http::StatusCode::NOT_FOUND,
+        SupervisorError::ImageInvalid(_) => axum::http::StatusCode::BAD_REQUEST,
     }
 }
 
@@ -55,6 +68,8 @@ pub struct Supervisor {
     data_dir: PathBuf,
     configs: Arc<RwLock<HashMap<String, EngineConfig>>>,
     handles: Arc<RwLock<HashMap<String, Arc<EngineHandle>>>>,
+    images: Arc<RwLock<HashMap<String, DockerImage>>>,
+    images_path: PathBuf,
     benchmark_path: PathBuf,
     benchmark_write_lock: Arc<Mutex<()>>,
 }
@@ -80,8 +95,12 @@ impl Supervisor {
 
         let configs_vec = load_config_store(&config_path, seed_path.as_ref()).await?;
         tracing::info!(count = configs_vec.len(), "loaded engine configs");
+        let images_path = data_dir.join("docker-images.json");
+        let images_vec = load_image_store(&images_path).await?;
+        tracing::info!(count = images_vec.len(), "loaded docker images");
         let mut configs = HashMap::new();
         let mut handles = HashMap::new();
+        let images = Arc::new(RwLock::new(images_to_map(&images_vec)));
         let benchmark_path = data_dir.join("benchmarks.jsonl");
 
         for config in configs_vec {
@@ -92,6 +111,7 @@ impl Supervisor {
                 id.clone(),
                 Arc::new(EngineHandle::new(
                     config,
+                    images.clone(),
                     data_dir.join("logs").join(format!("{id}.jsonl")),
                     data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
                     data_dir.join("status").join(format!("{id}.jsonl")),
@@ -104,6 +124,8 @@ impl Supervisor {
             data_dir,
             configs: Arc::new(RwLock::new(configs)),
             handles: Arc::new(RwLock::new(handles)),
+            images,
+            images_path,
             benchmark_path,
             benchmark_write_lock: Arc::new(Mutex::new(())),
         })
@@ -142,8 +164,83 @@ impl Supervisor {
         configs.get(id).cloned()
     }
 
+    pub async fn list_images(&self) -> Vec<DockerImage> {
+        let images = self.images.read().await;
+        let mut values: Vec<_> = images.values().cloned().collect();
+        values.sort_by(|a, b| a.id.cmp(&b.id));
+        values
+    }
+
+    pub async fn get_image(&self, id: &str) -> Option<DockerImage> {
+        let images = self.images.read().await;
+        images.get(id).cloned()
+    }
+
+    pub async fn add_image(
+        &self,
+        image: DockerImage,
+    ) -> Result<DockerImage, SupervisorError> {
+        validate_image(&image)?;
+        let mut images = self.images.write().await;
+        if images.contains_key(&image.id) {
+            return Err(SupervisorError::ImageExists);
+        }
+        let id = image.id.clone();
+        images.insert(id.clone(), image.clone());
+        persist_image_store(&self.images_path, &images).await;
+        tracing::info!(image_id = %id, "added docker image");
+        Ok(image)
+    }
+
+    pub async fn update_image(
+        &self,
+        id: &str,
+        image: DockerImage,
+    ) -> Result<DockerImage, SupervisorError> {
+        validate_image(&image)?;
+        if id != image.id {
+            return Err(SupervisorError::ImageInvalid(
+                "image id mismatch".to_string(),
+            ));
+        }
+        let mut images = self.images.write().await;
+        if !images.contains_key(id) {
+            return Err(SupervisorError::ImageNotFound);
+        }
+        images.insert(id.to_string(), image.clone());
+        persist_image_store(&self.images_path, &images).await;
+        tracing::info!(image_id = %id, "updated docker image");
+        Ok(image)
+    }
+
+    pub async fn remove_image(&self, id: &str) -> Result<(), SupervisorError> {
+        let configs = self.configs.read().await;
+        if configs.values().any(|config| {
+            config.engine_type == EngineType::Docker
+                && config
+                    .docker
+                    .as_ref()
+                    .map(|docker| docker.image_id == id)
+                    .unwrap_or(false)
+        }) {
+            return Err(SupervisorError::ImageInUse);
+        }
+        drop(configs);
+        let mut images = self.images.write().await;
+        if images.remove(id).is_none() {
+            return Err(SupervisorError::ImageNotFound);
+        }
+        persist_image_store(&self.images_path, &images).await;
+        tracing::info!(image_id = %id, "removed docker image");
+        Ok(())
+    }
+
     pub async fn add_config(&self, config: EngineConfig) -> Result<EngineConfig, SupervisorError> {
         validate_config(&config)?;
+        if matches!(config.engine_type, EngineType::Docker) {
+            let images = self.images.read().await;
+            validate_docker_config(&config, &images)?;
+        }
         let mut configs = self.configs.write().await;
         if configs.contains_key(&config.id) {
             return Err(SupervisorError::ConfigExists);
@@ -156,6 +253,7 @@ impl Supervisor {
             id.clone(),
             Arc::new(EngineHandle::new(
                 config.clone(),
+                self.images.clone(),
                 self.data_dir.join("logs").join(format!("{id}.jsonl")),
                 self.data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
                 self.data_dir.join("status").join(format!("{id}.jsonl")),
@@ -173,6 +271,10 @@ impl Supervisor {
         config: EngineConfig,
     ) -> Result<EngineConfig, SupervisorError> {
         validate_config(&config)?;
+        if matches!(config.engine_type, EngineType::Docker) {
+            let images = self.images.read().await;
+            validate_docker_config(&config, &images)?;
+        }
         if id != config.id {
             return Err(SupervisorError::ConfigInvalid(
                 "config id mismatch".to_string(),
@@ -192,6 +294,7 @@ impl Supervisor {
             id.to_string(),
             Arc::new(EngineHandle::new(
                 config.clone(),
+                self.images.clone(),
                 self.data_dir.join("logs").join(format!("{id}.jsonl")),
                 self.data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
                 self.data_dir.join("status").join(format!("{id}.jsonl")),
@@ -271,11 +374,30 @@ async fn load_config_store(
     Ok(Vec::new())
 }
 
+async fn load_image_store(path: &PathBuf) -> anyhow::Result<Vec<DockerImage>> {
+    if let Ok(raw) = tokio::fs::read_to_string(path).await {
+        if raw.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let images: Vec<DockerImage> = serde_json::from_str(&raw)?;
+        return Ok(images);
+    }
+    Ok(Vec::new())
+}
+
 fn configs_to_map(configs: &[EngineConfig]) -> HashMap<String, EngineConfig> {
     configs
         .iter()
         .cloned()
         .map(|config| (config.id.clone(), config))
+        .collect()
+}
+
+fn images_to_map(images: &[DockerImage]) -> HashMap<String, DockerImage> {
+    images
+        .iter()
+        .cloned()
+        .map(|image| (image.id.clone(), image))
         .collect()
 }
 
@@ -287,17 +409,74 @@ async fn persist_config_store(path: &PathBuf, configs: &HashMap<String, EngineCo
     }
 }
 
+async fn persist_image_store(path: &PathBuf, images: &HashMap<String, DockerImage>) {
+    let mut values: Vec<_> = images.values().cloned().collect();
+    values.sort_by(|a, b| a.id.cmp(&b.id));
+    if let Ok(serialized) = serde_json::to_string_pretty(&values) {
+        let _ = tokio::fs::write(path, serialized).await;
+    }
+}
+
 fn validate_config(config: &EngineConfig) -> Result<(), SupervisorError> {
     if config.id.trim().is_empty() {
         return Err(SupervisorError::ConfigInvalid("id is required".to_string()));
     }
-    if config.command.trim().is_empty() {
+    if config.name.trim().is_empty() {
+        return Err(SupervisorError::ConfigInvalid("name is required".to_string()));
+    }
+    if matches!(config.engine_type, EngineType::Docker) {
+        let docker = config
+            .docker
+            .as_ref()
+            .ok_or_else(|| SupervisorError::ConfigInvalid("docker config is required".to_string()))?;
+        if docker.image_id.trim().is_empty() {
+            return Err(SupervisorError::ConfigInvalid(
+                "docker image id is required".to_string(),
+            ));
+        }
+    } else if config.command.trim().is_empty() {
         return Err(SupervisorError::ConfigInvalid(
             "command is required".to_string(),
         ));
     }
-    if config.name.trim().is_empty() {
-        return Err(SupervisorError::ConfigInvalid("name is required".to_string()));
+    Ok(())
+}
+
+fn validate_docker_config(
+    config: &EngineConfig,
+    images: &HashMap<String, DockerImage>,
+) -> Result<(), SupervisorError> {
+    let docker = config
+        .docker
+        .as_ref()
+        .ok_or_else(|| SupervisorError::ConfigInvalid("docker config is required".to_string()))?;
+    if !images.contains_key(&docker.image_id) {
+        return Err(SupervisorError::ImageNotFound);
+    }
+    Ok(())
+}
+
+fn validate_image(image: &DockerImage) -> Result<(), SupervisorError> {
+    if image.id.trim().is_empty() {
+        return Err(SupervisorError::ImageInvalid("id is required".to_string()));
+    }
+    if image.name.trim().is_empty() {
+        return Err(SupervisorError::ImageInvalid("name is required".to_string()));
+    }
+    if image.image.trim().is_empty() {
+        return Err(SupervisorError::ImageInvalid("image is required".to_string()));
+    }
+    if let Some(build) = &image.build {
+        if build
+            .context
+            .as_ref()
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(true)
+        {
+            return Err(SupervisorError::ImageInvalid(
+                "build context is required".to_string(),
+            ));
+        }
     }
     Ok(())
 }
@@ -312,6 +491,7 @@ async fn handle_is_running(handle: &EngineHandle) -> bool {
 // Per-engine state + control handles.
 pub struct EngineHandle {
     config: EngineConfig,
+    images: Arc<RwLock<HashMap<String, DockerImage>>>,
     instance: Arc<RwLock<EngineInstance>>,
     pub log_buffer: Arc<Mutex<VecDeque<LogEntry>>>,
     pub log_tx: broadcast::Sender<LogEntry>,
@@ -333,6 +513,7 @@ struct EngineControl {
 impl EngineHandle {
     fn new(
         config: EngineConfig,
+        images: Arc<RwLock<HashMap<String, DockerImage>>>,
         log_path: PathBuf,
         session_path: PathBuf,
         status_path: PathBuf,
@@ -352,6 +533,7 @@ impl EngineHandle {
 
         Self {
             config,
+            images,
             instance: Arc::new(RwLock::new(instance)),
             log_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(LOG_BUFFER_MAX))),
             log_tx,
@@ -406,6 +588,7 @@ impl EngineHandle {
     fn clone_for_task(&self) -> EngineTaskHandle {
         EngineTaskHandle {
             config: self.config.clone(),
+            images: self.images.clone(),
             instance: self.instance.clone(),
             log_buffer: self.log_buffer.clone(),
             log_tx: self.log_tx.clone(),
@@ -423,6 +606,7 @@ impl EngineHandle {
 // Lightweight clone passed into the async task.
 struct EngineTaskHandle {
     config: EngineConfig,
+    images: Arc<RwLock<HashMap<String, DockerImage>>>,
     instance: Arc<RwLock<EngineInstance>>,
     log_buffer: Arc<Mutex<VecDeque<LogEntry>>>,
     log_tx: broadcast::Sender<LogEntry>,
@@ -448,7 +632,7 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
         tracing::info!(engine_id = %handle.config.id, "starting engine process");
         set_status(&handle, EngineStatus::Starting, None, None).await;
 
-        match spawn_process(&handle.config).await {
+        match spawn_process(&handle.config, &handle.images).await {
             Ok(mut child) => {
                 let pid = child.id();
                 let wait_for_ready = matches!(
@@ -536,7 +720,7 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
                                     pid = pid,
                                     "stop signal received; terminating engine process"
                                 );
-                                terminate_process_tree(&mut child).await;
+                                stop_engine_process(&handle, &mut child).await;
                                 set_status(&handle, EngineStatus::Stopped, None, None).await;
                                 should_monitor = false;
                                 session_stopped_at = Some(now());
@@ -566,7 +750,7 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
                                     pid = pid,
                                     "stop signal received; terminating engine process"
                                 );
-                                terminate_process_tree(&mut child).await;
+                                stop_engine_process(&handle, &mut child).await;
                                 set_status(&handle, EngineStatus::Stopped, None, None).await;
                                 session_stopped_at = Some(now());
                             }
@@ -629,7 +813,16 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
 }
 
 // Build and spawn the engine child process.
-async fn spawn_process(config: &EngineConfig) -> anyhow::Result<tokio::process::Child> {
+async fn spawn_process(
+    config: &EngineConfig,
+    images: &Arc<RwLock<HashMap<String, DockerImage>>>,
+) -> anyhow::Result<tokio::process::Child> {
+    if matches!(config.engine_type, EngineType::Docker) {
+        let image = resolve_docker_image(config, images).await?;
+        let resolved = resolve_docker_spec(config, &image);
+        return spawn_docker_process(config, &resolved).await;
+    }
+
     tracing::debug!(
         engine_id = %config.id,
         command = %config.command,
@@ -726,6 +919,417 @@ fn split_command_input(input: &str) -> Vec<String> {
         tokens.push(current);
     }
     tokens
+}
+
+struct ResolvedDockerSpec {
+    image: String,
+    ports: Vec<String>,
+    volumes: Vec<String>,
+    env: Vec<aiman_shared::EnvVar>,
+    run_args: Vec<String>,
+    workdir: Option<String>,
+    user: Option<String>,
+    command: Option<String>,
+    args: Vec<String>,
+    pull: bool,
+    remove: bool,
+    build: Option<DockerBuild>,
+}
+
+async fn resolve_docker_image(
+    config: &EngineConfig,
+    images: &Arc<RwLock<HashMap<String, DockerImage>>>,
+) -> anyhow::Result<DockerImage> {
+    let docker = config
+        .docker
+        .as_ref()
+        .context("docker config missing")?;
+    let images = images.read().await;
+    images
+        .get(&docker.image_id)
+        .cloned()
+        .context("docker image not found")
+}
+
+fn resolve_docker_spec(config: &EngineConfig, image: &DockerImage) -> ResolvedDockerSpec {
+    let docker = config.docker.as_ref();
+    let extra_ports = docker
+        .map(|docker| docker.extra_ports.clone())
+        .unwrap_or_default();
+    let extra_volumes = docker
+        .map(|docker| docker.extra_volumes.clone())
+        .unwrap_or_default();
+    let extra_env = docker
+        .map(|docker| docker.extra_env.clone())
+        .unwrap_or_default();
+    let extra_run_args = docker
+        .map(|docker| docker.extra_run_args.clone())
+        .unwrap_or_default();
+
+    let mut ports = image.ports.clone();
+    ports.extend(extra_ports);
+    let mut volumes = image.volumes.clone();
+    volumes.extend(extra_volumes);
+    let mut env = image.env.clone();
+    env.extend(extra_env);
+    env.extend(config.env.clone());
+    let mut run_args = image.run_args.clone();
+    run_args.extend(extra_run_args);
+
+    let pull = docker
+        .and_then(|docker| docker.pull)
+        .unwrap_or(image.pull);
+    let remove = docker
+        .and_then(|docker| docker.remove)
+        .unwrap_or(image.remove);
+
+    let workdir = docker
+        .and_then(|docker| docker.workdir.clone())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| image.workdir.clone());
+    let user = docker
+        .and_then(|docker| docker.user.clone())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| image.user.clone());
+    let command = docker
+        .and_then(|docker| docker.command.clone())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| image.command.clone());
+
+    let mut args = image.args.clone();
+    if let Some(docker) = docker {
+        args.extend(docker.args.iter().cloned());
+    }
+
+    ResolvedDockerSpec {
+        image: image.image.clone(),
+        ports,
+        volumes,
+        env,
+        run_args,
+        workdir,
+        user,
+        command,
+        args,
+        pull,
+        remove,
+        build: image.build.clone(),
+    }
+}
+
+async fn spawn_docker_process(
+    config: &EngineConfig,
+    docker: &ResolvedDockerSpec,
+) -> anyhow::Result<tokio::process::Child> {
+    let runtime = docker_runtime_command(config);
+
+    if let Some(build) = &docker.build {
+        build_docker_image(&runtime, config, build, &docker.image).await?;
+    } else if docker.pull {
+        pull_docker_image(&runtime, config, &docker.image).await?;
+    }
+
+    tracing::debug!(
+        engine_id = %config.id,
+        runtime = %runtime,
+        image = %docker.image,
+        "spawning docker engine process"
+    );
+
+    let mut args: Vec<String> = Vec::new();
+    args.push("run".to_string());
+    if docker.remove {
+        args.push("--rm".to_string());
+    }
+
+    let container_name = config
+        .docker
+        .as_ref()
+        .map(|docker| docker_container_name(config, docker))
+        .unwrap_or_else(|| config.id.clone());
+    if !container_name.is_empty() {
+        args.push("--name".to_string());
+        args.push(container_name);
+    }
+
+    for port in docker.ports.iter().map(|value| value.trim()).filter(|value| !value.is_empty()) {
+        args.push("-p".to_string());
+        args.push(port.to_string());
+    }
+
+    for volume in docker
+        .volumes
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        args.push("-v".to_string());
+        args.push(volume.to_string());
+    }
+
+    if let Some(workdir) = docker
+        .workdir
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        args.push("-w".to_string());
+        args.push(workdir.to_string());
+    }
+
+    if let Some(user) = docker
+        .user
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        args.push("-u".to_string());
+        args.push(user.to_string());
+    }
+
+    for env in &docker.env {
+        if !env.key.trim().is_empty() {
+            args.push("-e".to_string());
+            args.push(format!("{}={}", env.key, env.value));
+        }
+    }
+
+    for arg in &docker.run_args {
+        args.extend(split_command_input(arg));
+    }
+
+    let image = docker.image.trim();
+    if image.is_empty() {
+        anyhow::bail!("docker image is required");
+    }
+    args.push(image.to_string());
+
+    if let Some(command) = docker
+        .command
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        args.extend(split_command_input(command));
+    }
+
+    for arg in &docker.args {
+        args.extend(split_command_input(arg));
+    }
+
+    let mut command = docker_command(&runtime);
+    command.args(args);
+
+    if let Some(dir) = &config.working_dir {
+        command.current_dir(dir);
+    }
+
+    #[cfg(unix)]
+    {
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+    }
+
+    let child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+
+    Ok(child)
+}
+
+fn docker_runtime_command(config: &EngineConfig) -> String {
+    let trimmed = config.command.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    if let Ok(value) = std::env::var("AIMAN_DOCKER_RUNTIME") {
+        if !value.trim().is_empty() {
+            return value;
+        }
+    }
+    "docker".to_string()
+}
+
+fn docker_container_name(config: &EngineConfig, docker: &DockerConfig) -> String {
+    docker
+        .container_name
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| config.id.clone())
+}
+
+async fn build_docker_image(
+    runtime: &str,
+    config: &EngineConfig,
+    build: &DockerBuild,
+    image: &str,
+) -> anyhow::Result<()> {
+    let context = build.context.as_deref().unwrap_or("");
+    if context.trim().is_empty() {
+        anyhow::bail!("docker build context is required");
+    }
+    let image = image.trim();
+    if image.is_empty() {
+        anyhow::bail!("docker image is required for build");
+    }
+
+    let mut command = docker_command(runtime);
+    command.arg("build").arg("-t").arg(image);
+    if build.pull {
+        command.arg("--pull");
+    }
+    if build.no_cache {
+        command.arg("--no-cache");
+    }
+    if let Some(target) = build
+        .target
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        command.arg("--target").arg(target);
+    }
+    let mut temp_dockerfile: Option<PathBuf> = None;
+    if let Some(content) = build
+        .dockerfile_content
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        let filename = format!(
+            "aiman-dockerfile-{}-{}.Dockerfile",
+            config.id,
+            Utc::now().timestamp_millis()
+        );
+        let path = std::env::temp_dir().join(filename);
+        tokio::fs::write(&path, content).await?;
+        temp_dockerfile = Some(path);
+    }
+
+    if let Some(dockerfile) = temp_dockerfile.as_ref() {
+        command.arg("-f").arg(dockerfile);
+    } else if let Some(dockerfile) = build
+        .dockerfile
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        command.arg("-f").arg(dockerfile);
+    }
+    for entry in &build.build_args {
+        if !entry.key.trim().is_empty() {
+            command
+                .arg("--build-arg")
+                .arg(format!("{}={}", entry.key, entry.value));
+        }
+    }
+    command.arg(context.trim());
+
+    if let Some(dir) = &config.working_dir {
+        command.current_dir(dir);
+    }
+
+    let output = command.output().await?;
+    if let Some(path) = temp_dockerfile {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = if !stderr.trim().is_empty() {
+            stderr.trim()
+        } else {
+            stdout.trim()
+        };
+        anyhow::bail!("docker build failed: {}", detail);
+    }
+    Ok(())
+}
+
+async fn pull_docker_image(
+    runtime: &str,
+    config: &EngineConfig,
+    image: &str,
+) -> anyhow::Result<()> {
+    let image = image.trim();
+    if image.is_empty() {
+        anyhow::bail!("docker image is required for pull");
+    }
+    let mut command = docker_command(runtime);
+    command.arg("pull").arg(image);
+    if let Some(dir) = &config.working_dir {
+        command.current_dir(dir);
+    }
+    let output = command.output().await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = if !stderr.trim().is_empty() {
+            stderr.trim()
+        } else {
+            stdout.trim()
+        };
+        anyhow::bail!("docker pull failed: {}", detail);
+    }
+    Ok(())
+}
+
+async fn stop_engine_process(handle: &EngineTaskHandle, child: &mut tokio::process::Child) {
+    if matches!(handle.config.engine_type, EngineType::Docker) {
+        if let Err(err) = stop_docker_container(&handle.config).await {
+            tracing::warn!(
+                engine_id = %handle.config.id,
+                error = %err,
+                "failed to stop docker container"
+            );
+        }
+    }
+    terminate_process_tree(child).await;
+}
+
+async fn stop_docker_container(config: &EngineConfig) -> anyhow::Result<()> {
+    let docker = match &config.docker {
+        Some(docker) => docker,
+        None => return Ok(()),
+    };
+    let container_name = docker_container_name(config, docker);
+    if container_name.trim().is_empty() {
+        return Ok(());
+    }
+    let runtime = docker_runtime_command(config);
+    let mut command = docker_command(&runtime);
+    command.arg("stop").arg(container_name);
+    if let Some(dir) = &config.working_dir {
+        command.current_dir(dir);
+    }
+    let _ = command.output().await;
+    Ok(())
+}
+
+fn docker_command(runtime: &str) -> Command {
+    let mut parts = split_command_input(runtime);
+    let command_name = parts
+        .first()
+        .cloned()
+        .unwrap_or_else(|| runtime.to_string());
+    if !parts.is_empty() {
+        parts.remove(0);
+    }
+    let mut command = Command::new(command_name);
+    if !parts.is_empty() {
+        command.args(parts);
+    }
+    command
 }
 
 async fn terminate_process_tree(child: &mut tokio::process::Child) {

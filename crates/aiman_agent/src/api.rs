@@ -7,7 +7,9 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 
-use aiman_shared::{EngineConfig, EngineInstance, EngineStatus, LogEntry, LogSession};
+use aiman_shared::{
+    DockerImage, EngineConfig, EngineInstance, EngineStatus, EngineType, LogEntry, LogSession,
+};
 
 use crate::benchmark::{run_benchmark, BenchmarkRecord, BenchmarkRequest};
 use crate::hardware::HardwareInfo;
@@ -237,8 +239,19 @@ pub async fn benchmark_engine(
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
+    let BenchmarkRequest { mut settings, host } = request;
+    if settings.api_base_url.is_none() && matches!(config.engine_type, EngineType::Docker) {
+        if let Some(docker) = config.docker.as_ref() {
+            if let Some(image) = state.supervisor.get_image(&docker.image_id).await {
+                if let Some(api_base_url) = infer_docker_api_base(&config, &image) {
+                    settings.api_base_url = Some(api_base_url);
+                }
+            }
+        }
+    }
+
     let hardware = state.hardware_cache.lock().await.get().await;
-    let record = run_benchmark(config, instance, request.host, Some(hardware), request.settings)
+    let record = run_benchmark(config, instance, host, Some(hardware), settings)
         .await
         .map_err(|err| {
             tracing::error!(engine_id = %id, error = %err, "benchmark failed");
@@ -266,11 +279,96 @@ pub async fn list_benchmarks(
     Ok(Json(BenchmarksResponse { records: entries }))
 }
 
+fn infer_docker_api_base(config: &EngineConfig, image: &DockerImage) -> Option<String> {
+    let docker_args = config
+        .docker
+        .as_ref()
+        .map(|docker| docker.args.as_slice())
+        .unwrap_or(&[]);
+    let mut host = parse_arg_value(docker_args, "--host")
+        .or_else(|| parse_arg_value(docker_args, "--bind"))
+        .or_else(|| parse_arg_value(&config.args, "--host"))
+        .or_else(|| parse_arg_value(&config.args, "--bind"))
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let ports = match &config.docker {
+        Some(docker) => {
+            let mut ports = image.ports.clone();
+            ports.extend(docker.extra_ports.clone());
+            ports
+        }
+        None => image.ports.clone(),
+    };
+    let port = parse_arg_value(docker_args, "--port")
+        .and_then(|value| value.parse::<u16>().ok())
+        .or_else(|| parse_docker_host_port(&ports))
+        .unwrap_or(8000);
+    if host == "0.0.0.0" || host == "::" {
+        host = "127.0.0.1".to_string();
+    }
+    Some(format!("http://{host}:{port}"))
+}
+
+fn parse_arg_value(args: &[String], key: &str) -> Option<String> {
+    for (idx, value) in args.iter().enumerate() {
+        if value == key {
+            return args.get(idx + 1).cloned();
+        }
+        if let Some(stripped) = value.strip_prefix(&format!("{key}=")) {
+            return Some(stripped.to_string());
+        }
+    }
+    None
+}
+
+fn parse_docker_host_port(ports: &[String]) -> Option<u16> {
+    for mapping in ports {
+        if let Some(port) = parse_docker_port_mapping(mapping) {
+            return Some(port);
+        }
+    }
+    None
+}
+
+fn parse_docker_port_mapping(mapping: &str) -> Option<u16> {
+    let trimmed = mapping.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let no_proto = trimmed.split('/').next().unwrap_or(trimmed).trim();
+    let parts: Vec<&str> = no_proto.split(':').collect();
+    let host_port = if parts.len() >= 2 {
+        parts.get(parts.len() - 2).copied()
+    } else {
+        parts.first().copied()
+    }?;
+    host_port.trim().parse::<u16>().ok()
+}
+
 pub async fn list_configs(State(state): State<AppState>) -> Json<ConfigsResponse> {
     tracing::debug!("list configs requested");
     Json(ConfigsResponse {
         configs: state.supervisor.list_configs().await,
     })
+}
+
+pub async fn list_images(State(state): State<AppState>) -> Json<ImagesResponse> {
+    tracing::debug!("list images requested");
+    Json(ImagesResponse {
+        images: state.supervisor.list_images().await,
+    })
+}
+
+pub async fn get_image(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ImageResponse>, StatusCode> {
+    tracing::debug!(image_id = %id, "get image requested");
+    let image = state
+        .supervisor
+        .get_image(&id)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(ImageResponse { image }))
 }
 
 pub async fn create_config(
@@ -284,6 +382,19 @@ pub async fn create_config(
         .await
         .map_err(map_supervisor_error)?;
     Ok(Json(ConfigResponse { config }))
+}
+
+pub async fn create_image(
+    State(state): State<AppState>,
+    Json(image): Json<DockerImage>,
+) -> Result<Json<ImageResponse>, StatusCode> {
+    tracing::info!(image_id = %image.id, "create image API called");
+    let image = state
+        .supervisor
+        .add_image(image)
+        .await
+        .map_err(map_supervisor_error)?;
+    Ok(Json(ImageResponse { image }))
 }
 
 pub async fn update_config(
@@ -300,6 +411,20 @@ pub async fn update_config(
     Ok(Json(ConfigResponse { config }))
 }
 
+pub async fn update_image(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(image): Json<DockerImage>,
+) -> Result<Json<ImageResponse>, StatusCode> {
+    tracing::info!(image_id = %id, "update image API called");
+    let image = state
+        .supervisor
+        .update_image(&id, image)
+        .await
+        .map_err(map_supervisor_error)?;
+    Ok(Json(ImageResponse { image }))
+}
+
 pub async fn delete_config(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -308,6 +433,19 @@ pub async fn delete_config(
     state
         .supervisor
         .remove_config(&id)
+        .await
+        .map_err(map_supervisor_error)?;
+    Ok(Json(DeleteResponse { ok: true }))
+}
+
+pub async fn delete_image(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<DeleteResponse>, StatusCode> {
+    tracing::info!(image_id = %id, "delete image API called");
+    state
+        .supervisor
+        .remove_image(&id)
         .await
         .map_err(map_supervisor_error)?;
     Ok(Json(DeleteResponse { ok: true }))
@@ -354,6 +492,16 @@ pub(crate) struct ConfigsResponse {
 #[derive(Serialize)]
 pub(crate) struct ConfigResponse {
     config: EngineConfig,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ImagesResponse {
+    images: Vec<DockerImage>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ImageResponse {
+    image: DockerImage,
 }
 
 #[derive(Serialize)]
