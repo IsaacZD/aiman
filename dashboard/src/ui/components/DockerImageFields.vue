@@ -51,10 +51,6 @@
       />
     </label>
     <label>
-      Container workdir
-      <input v-model="form.workdir" type="text" placeholder="/app" />
-    </label>
-    <label>
       Container user
       <input v-model="form.user" type="text" placeholder="1000:1000" />
     </label>
@@ -78,24 +74,12 @@
       </label>
       <div v-if="form.build.enabled" class="field-group-body">
         <label>
-          Build context
-          <input v-model="form.build.context" type="text" placeholder="." />
-        </label>
-        <label>
-          Dockerfile path
-          <input v-model="form.build.dockerfile" type="text" placeholder="Dockerfile" />
-        </label>
-        <label>
           Dockerfile content
           <textarea
             v-model="form.build.dockerfile_content"
             rows="6"
             placeholder="FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04"
           ></textarea>
-        </label>
-        <label>
-          Build target
-          <input v-model="form.build.target" type="text" placeholder="optional" />
         </label>
         <div class="field-row">
           <label class="checkbox">

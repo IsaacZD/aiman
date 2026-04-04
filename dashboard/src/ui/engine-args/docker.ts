@@ -5,10 +5,7 @@ export type EnvVar = {
 
 export type DockerImageBuildForm = {
   enabled: boolean;
-  context: string;
-  dockerfile: string;
   dockerfile_content: string;
-  target: string;
   pull: boolean;
   no_cache: boolean;
   build_args: EnvVar[];
@@ -22,7 +19,6 @@ export type DockerImageForm = {
   volumes: string[];
   env: EnvVar[];
   run_args: string[];
-  workdir: string;
   user: string;
   command: string;
   args: string[];
@@ -38,7 +34,6 @@ export type DockerEngineForm = {
   extra_volumes: string[];
   extra_env: EnvVar[];
   extra_run_args: string[];
-  workdir: string;
   user: string;
   command: string;
   args: string[];
@@ -55,7 +50,6 @@ export function createDockerImageForm(): DockerImageForm {
     volumes: [],
     env: [],
     run_args: [],
-    workdir: "",
     user: "",
     command: "",
     args: [],
@@ -63,10 +57,7 @@ export function createDockerImageForm(): DockerImageForm {
     remove: true,
     build: {
       enabled: false,
-      context: "",
-      dockerfile: "",
       dockerfile_content: "",
-      target: "",
       pull: false,
       no_cache: false,
       build_args: []
@@ -82,7 +73,6 @@ export function createDockerEngineForm(): DockerEngineForm {
     extra_volumes: [],
     extra_env: [],
     extra_run_args: [],
-    workdir: "",
     user: "",
     command: "",
     args: [],

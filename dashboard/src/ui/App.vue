@@ -131,6 +131,7 @@
         @open-config-modal="handleOpenConfigModal"
         @open-config-template-modal="handleOpenConfigTemplateModal"
         @open-image-modal="handleOpenImageModal"
+        @prune-images="pruneImages(configHostId)"
       />
     </main>
   </div>
@@ -308,7 +309,8 @@ const {
   closeImageModal,
   loadImages,
   saveImage,
-  deleteImageFromModal
+  deleteImageFromModal,
+  pruneImages
 } = useDockerImages();
 
 const {

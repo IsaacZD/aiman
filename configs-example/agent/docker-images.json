@@ -8,17 +8,13 @@
     "env": [{ "key": "HF_HOME", "value": "/data/hf" }],
     "run_args": [],
     "gpus": "all",
-    "workdir": null,
     "user": null,
     "command": "python -m vllm.entrypoints.openai.api_server",
     "args": ["--model", "/models/llama"],
     "pull": true,
     "remove": true,
     "build": {
-      "context": "/var/lib/aiman/docker/vllm",
       "dockerfile_content": "FROM vllm/vllm-openai:latest",
-      "dockerfile": null,
-      "target": null,
       "build_args": [{ "key": "VLLM_VERSION", "value": "latest" }],
       "pull": true,
       "no_cache": false

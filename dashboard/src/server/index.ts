@@ -224,6 +224,18 @@ server.delete("/api/hosts/:hostId/images/:imageId", async (request, reply) => {
   return reply.code(status).send(body);
 });
 
+// Prune orphaned aiman-managed Docker images on a host.
+server.post("/api/hosts/:hostId/images/prune", async (request, reply) => {
+  const { hostId } = request.params as { hostId: string };
+  const host = await findHost(hostId);
+  if (!host) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+
+  const { status, body } = await proxyRequest(host, "/v1/images/prune", { method: "POST" });
+  return reply.code(status).send(body);
+});
+
 // Proxy create config to the selected host.
 server.post("/api/hosts/:hostId/configs", async (request, reply) => {
   const { hostId } = request.params as { hostId: string };

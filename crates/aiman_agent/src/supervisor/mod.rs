@@ -7,13 +7,16 @@ pub use handle::EngineHandle;
 pub use store::{read_jsonl, read_log_entries, read_log_sessions};
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::Arc,
 };
 
 use aiman_shared::{DockerImage, EngineConfig, EngineInstance, EngineStatus, EngineType};
-use bollard::Docker;
+use bollard::{
+    query_parameters::{ListImagesOptions, RemoveImageOptions},
+    Docker,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 
@@ -301,6 +304,47 @@ impl Supervisor {
         Ok(instance)
     }
 
+    /// Remove any Docker image labeled `managed-by=aiman` whose tag is no longer
+    /// referenced by any current aiman image config.  Returns the list of removed tags.
+    pub async fn prune_images(&self) -> Result<Vec<String>, SupervisorError> {
+        // Collect all tags currently referenced by aiman image configs.
+        let images = self.images.read().await;
+        let live_tags: HashSet<String> = images.values().map(|img| img.image.clone()).collect();
+        drop(images);
+
+        // Ask Docker for every image we previously labeled.
+        let mut filters = HashMap::new();
+        filters.insert("label".to_string(), vec!["managed-by=aiman".to_string()]);
+        let daemon_images = self
+            .docker_client
+            .list_images(Some(ListImagesOptions { filters: Some(filters), ..Default::default() }))
+            .await
+            .map_err(|e| SupervisorError::DockerApi(e.to_string()))?;
+
+        let mut removed = Vec::new();
+        for img in daemon_images {
+            for tag in &img.repo_tags {
+                if !live_tags.contains(tag) {
+                    let result = self
+                        .docker_client
+                        .remove_image(
+                            tag,
+                            Some(RemoveImageOptions { force: false, noprune: false, platforms: None }),
+                            None,
+                        )
+                        .await;
+                    if result.is_ok() {
+                        tracing::info!(tag = %tag, "pruned orphaned aiman-managed image");
+                        removed.push(tag.clone());
+                    } else if let Err(err) = result {
+                        tracing::warn!(tag = %tag, error = %err, "failed to prune image");
+                    }
+                }
+            }
+        }
+        Ok(removed)
+    }
+
     pub fn benchmark_path(&self) -> &PathBuf {
         &self.benchmark_path
     }
@@ -433,13 +477,13 @@ fn validate_image(image: &DockerImage) -> Result<(), SupervisorError> {
     }
     if let Some(build) = &image.build {
         if build
-            .context
+            .dockerfile_content
             .as_ref()
             .map(|value| value.trim().is_empty())
             .unwrap_or(true)
         {
             return Err(SupervisorError::ImageInvalid(
-                "build context is required".to_string(),
+                "dockerfile_content is required when build is enabled".to_string(),
             ));
         }
     }

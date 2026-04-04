@@ -4,6 +4,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use serde_json::json;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 
@@ -436,6 +437,13 @@ pub async fn delete_config(
         .await
         .map_err(map_supervisor_error)?;
     Ok(Json(DeleteResponse { ok: true }))
+}
+
+pub async fn prune_images(State(state): State<AppState>) -> impl IntoResponse {
+    match state.supervisor.prune_images().await {
+        Ok(removed) => Json(json!({ "removed": removed })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 pub async fn delete_image(

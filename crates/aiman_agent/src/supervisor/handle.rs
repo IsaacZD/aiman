@@ -14,7 +14,7 @@ use bollard::{
     container::LogOutput,
     models::{ContainerCreateBody, DeviceRequest, HostConfig, PortBinding},
     query_parameters::{
-        CreateContainerOptions, CreateImageOptions, LogsOptions, RemoveContainerOptions,
+        CreateContainerOptions, LogsOptions, RemoveContainerOptions,
         StartContainerOptions, StopContainerOptions, WaitContainerOptions,
     },
     Docker,
@@ -220,12 +220,15 @@ async fn run_docker_engine(
     let image = resolve_docker_image(&handle.config, &handle.images).await?;
     let resolved = resolve_docker_spec(&handle.config, &image);
 
-    // Build phase (CLI — tar streaming is complex, keep as-is).
+    // Build/label phase: attach managed-by=aiman label so orphaned images can be pruned.
     if let Some(build) = &resolved.build {
-        build_docker_image(&handle.config, build, &resolved.image).await?;
+        build_docker_image(build, &resolved.image, &image.id).await?;
     } else if resolved.pull {
-        stream_docker_pull(handle, &resolved.image).await?;
+        // No custom Dockerfile: build a one-line FROM wrapper with --pull so Docker
+        // fetches the latest registry image and we can attach our labels in one step.
+        label_docker_image(&resolved.image, &image.id).await?;
     }
+    // else: pull=false — use the existing local image as-is; no labeling.
 
     // Container name: prefer explicit config, fall back to engine id.
     let container_name = handle
@@ -414,57 +417,34 @@ async fn finalize_session(
     let _ = log_task.await;
 }
 
-/// Stream pull progress lines into the log buffer so the UI can show them.
-async fn stream_docker_pull(
-    handle: &Arc<EngineTaskHandle>,
-    image: &str,
-) -> anyhow::Result<()> {
+/// Pull-only path: build a one-line `FROM <image>` Dockerfile with --pull so
+/// Docker fetches the latest registry image and we can attach aiman labels in
+/// the same step.  The resulting local image keeps the original tag.
+async fn label_docker_image(image: &str, image_config_id: &str) -> anyhow::Result<()> {
     let image = image.trim();
     if image.is_empty() {
         anyhow::bail!("docker image is required for pull");
     }
-    tracing::info!(engine_id = %handle.config.id, image = %image, "pulling docker image");
+    tracing::info!(image = %image, image_config_id = %image_config_id, "labeling docker image via build");
 
-    let session_id = new_session_id();
-    let mut stream = handle.docker_client.create_image(
-        Some(CreateImageOptions {
-            from_image: Some(image.to_string()),
-            ..Default::default()
-        }),
-        None,
-        None,
-    );
+    let build_dir = std::env::temp_dir()
+        .join(format!("aiman-label-{}", Utc::now().timestamp_millis()));
+    tokio::fs::create_dir_all(&build_dir).await?;
+    tokio::fs::write(build_dir.join("Dockerfile"), format!("FROM {image}")).await?;
 
-    while let Some(result) = stream.next().await {
-        match result {
-            Ok(info) => {
-                let status = info.status.as_deref().unwrap_or("").trim().to_string();
-                let progress = info
-                    .progress_detail
-                    .as_ref()
-                    .and_then(|d| {
-                        let cur = d.current.unwrap_or(0);
-                        let tot = d.total.unwrap_or(0);
-                        if tot > 0 {
-                            Some(format!("{cur}/{tot}"))
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_default();
-                let line = if progress.is_empty() {
-                    status
-                } else {
-                    format!("{status} {progress}")
-                };
-                if !line.is_empty() {
-                    emit_log(handle, LogStream::Stdout, &session_id, line).await;
-                }
-            }
-            Err(err) => {
-                anyhow::bail!("docker pull failed: {err}");
-            }
-        }
+    let output = Command::new("docker")
+        .arg("build")
+        .arg("-t").arg(image)
+        .arg("--pull")
+        .arg("--label").arg("managed-by=aiman")
+        .arg("--label").arg(format!("aiman.image-id={image_config_id}"))
+        .arg(&build_dir)
+        .output()
+        .await?;
+    let _ = tokio::fs::remove_dir_all(&build_dir).await;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("docker label step failed: {}", stderr.trim());
     }
     Ok(())
 }
@@ -569,11 +549,6 @@ async fn create_docker_container(
         image: Some(resolved.image.trim().to_string()),
         cmd,
         env: if env.is_empty() { None } else { Some(env) },
-        working_dir: resolved
-            .workdir
-            .as_ref()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty()),
         user: resolved
             .user
             .as_ref()
@@ -933,7 +908,6 @@ struct ResolvedDockerSpec {
     ports: Vec<String>,
     volumes: Vec<String>,
     env: Vec<aiman_shared::EnvVar>,
-    workdir: Option<String>,
     user: Option<String>,
     command: Option<String>,
     args: Vec<String>,
@@ -985,10 +959,6 @@ fn resolve_docker_spec(config: &EngineConfig, image: &DockerImage) -> ResolvedDo
         .and_then(|d| d.remove)
         .unwrap_or(image.remove);
 
-    let workdir = docker
-        .and_then(|d| d.workdir.clone())
-        .filter(|v| !v.trim().is_empty())
-        .or_else(|| image.workdir.clone());
     let user = docker
         .and_then(|d| d.user.clone())
         .filter(|v| !v.trim().is_empty())
@@ -1014,7 +984,6 @@ fn resolve_docker_spec(config: &EngineConfig, image: &DockerImage) -> ResolvedDo
         ports,
         volumes,
         env,
-        workdir,
         user,
         command,
         args,
@@ -1038,61 +1007,36 @@ fn docker_container_name(config: &EngineConfig, docker: &DockerConfig) -> String
 // ── Docker image build (CLI — kept for tar-context simplicity) ────────────────
 
 async fn build_docker_image(
-    config: &EngineConfig,
     build: &DockerBuild,
     image: &str,
+    image_config_id: &str,
 ) -> anyhow::Result<()> {
-    let context = build.context.as_deref().unwrap_or("");
-    if context.trim().is_empty() {
-        anyhow::bail!("docker build context is required");
-    }
     let image = image.trim();
     if image.is_empty() {
         anyhow::bail!("docker image is required for build");
     }
+    let content = build
+        .dockerfile_content
+        .as_ref()
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("dockerfile_content is required for build"))?;
+
+    // Write Dockerfile into a temp dir and use that dir as the build context.
+    let build_dir = std::env::temp_dir().join(format!("aiman-build-{}", Utc::now().timestamp_millis()));
+    tokio::fs::create_dir_all(&build_dir).await?;
+    tokio::fs::write(build_dir.join("Dockerfile"), content).await?;
 
     let mut command = Command::new("docker");
     command.arg("build").arg("-t").arg(image);
+    command
+        .arg("--label").arg("managed-by=aiman")
+        .arg("--label").arg(format!("aiman.image-id={image_config_id}"));
     if build.pull {
         command.arg("--pull");
     }
     if build.no_cache {
         command.arg("--no-cache");
-    }
-    if let Some(target) = build
-        .target
-        .as_ref()
-        .map(|v| v.trim())
-        .filter(|v| !v.is_empty())
-    {
-        command.arg("--target").arg(target);
-    }
-    let mut temp_dockerfile: Option<std::path::PathBuf> = None;
-    if let Some(content) = build
-        .dockerfile_content
-        .as_ref()
-        .map(|v| v.trim())
-        .filter(|v| !v.is_empty())
-    {
-        let filename = format!(
-            "aiman-dockerfile-{}-{}.Dockerfile",
-            config.id,
-            Utc::now().timestamp_millis()
-        );
-        let path = std::env::temp_dir().join(filename);
-        tokio::fs::write(&path, content).await?;
-        temp_dockerfile = Some(path);
-    }
-
-    if let Some(dockerfile) = temp_dockerfile.as_ref() {
-        command.arg("-f").arg(dockerfile);
-    } else if let Some(dockerfile) = build
-        .dockerfile
-        .as_ref()
-        .map(|v| v.trim())
-        .filter(|v| !v.is_empty())
-    {
-        command.arg("-f").arg(dockerfile);
     }
     for entry in &build.build_args {
         if !entry.key.trim().is_empty() {
@@ -1101,16 +1045,10 @@ async fn build_docker_image(
                 .arg(format!("{}={}", entry.key, entry.value));
         }
     }
-    command.arg(context.trim());
-
-    if let Some(dir) = &config.working_dir {
-        command.current_dir(dir);
-    }
+    command.arg(&build_dir);
 
     let output = command.output().await?;
-    if let Some(path) = temp_dockerfile {
-        let _ = tokio::fs::remove_file(path).await;
-    }
+    let _ = tokio::fs::remove_dir_all(&build_dir).await;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);

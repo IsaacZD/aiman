@@ -42,10 +42,6 @@
       />
     </label>
     <label>
-      Override workdir
-      <input v-model="form.workdir" type="text" placeholder="inherit from image template" />
-    </label>
-    <label>
       Override user
       <input v-model="form.user" type="text" placeholder="inherit from image template" />
     </label>

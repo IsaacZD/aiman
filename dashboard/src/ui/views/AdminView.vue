@@ -26,9 +26,10 @@
         <button v-if="adminTab === 'configs'" class="secondary" @click="$emit('open-config-modal')">
           New config
         </button>
-        <button v-if="adminTab === 'images'" class="secondary" @click="$emit('open-image-modal')">
-          New image
-        </button>
+        <template v-if="adminTab === 'images'">
+          <button class="ghost" @click="$emit('prune-images')">Prune images</button>
+          <button class="secondary" @click="$emit('open-image-modal')">New image</button>
+        </template>
       </div>
 
       <!-- Configs tab -->
@@ -94,6 +95,7 @@ defineEmits<{
   (e: "open-config-modal", config?: EngineConfig): void;
   (e: "open-config-template-modal", config: EngineConfig): void;
   (e: "open-image-modal", image?: DockerImage): void;
+  (e: "prune-images"): void;
 }>();
 
 const adminTab = ref<"configs" | "images">("configs");

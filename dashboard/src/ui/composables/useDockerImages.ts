@@ -56,7 +56,6 @@ export function useDockerImages() {
       volumes: image.volumes ? [...image.volumes] : [],
       env: image.env ? [...image.env] : [],
       run_args: image.run_args ? [...image.run_args] : [],
-      workdir: image.workdir ?? "",
       user: image.user ?? "",
       command: image.command ?? "",
       args: image.args ? [...image.args] : [],
@@ -64,10 +63,7 @@ export function useDockerImages() {
       remove: image.remove !== false,
       build: {
         enabled: Boolean(image.build),
-        context: image.build?.context ?? "",
-        dockerfile: image.build?.dockerfile ?? "",
         dockerfile_content: image.build?.dockerfile_content ?? "",
-        target: image.build?.target ?? "",
         pull: Boolean(image.build?.pull),
         no_cache: Boolean(image.build?.no_cache),
         build_args: image.build?.build_args ? [...image.build.build_args] : []
@@ -118,8 +114,8 @@ export function useDockerImages() {
     if (!imageForm.value.image.trim()) {
       errors.push("Image reference is required.");
     }
-    if (imageForm.value.build.enabled && !imageForm.value.build.context.trim()) {
-      errors.push("Build context is required.");
+    if (imageForm.value.build.enabled && !imageForm.value.build.dockerfile_content.trim()) {
+      errors.push("Dockerfile content is required.");
     }
 
     const envEntries = buildEnvEntries(imageForm.value.env, errors);
@@ -148,7 +144,6 @@ export function useDockerImages() {
       volumes: cleanStringList(imageForm.value.volumes),
       env: envEntries,
       run_args: cleanStringList(imageForm.value.run_args),
-      workdir: imageForm.value.workdir.trim() || null,
       user: imageForm.value.user.trim() || null,
       command: imageForm.value.command.trim() || null,
       args: cleanStringList(imageForm.value.args),
@@ -156,10 +151,7 @@ export function useDockerImages() {
       remove: Boolean(imageForm.value.remove),
       build: imageForm.value.build.enabled
         ? {
-            context: imageForm.value.build.context.trim(),
-            dockerfile: imageForm.value.build.dockerfile.trim() || null,
             dockerfile_content: imageForm.value.build.dockerfile_content.trim() || null,
-            target: imageForm.value.build.target.trim() || null,
             build_args: buildArgs,
             pull: Boolean(imageForm.value.build.pull),
             no_cache: Boolean(imageForm.value.build.no_cache)
@@ -225,6 +217,21 @@ export function useDockerImages() {
     await loadImages(configHostId);
   }
 
+  async function pruneImages(configHostId: string | null): Promise<void> {
+    if (!configHostId) return;
+    imageErrors.value = [];
+    const res = await fetch(`/api/hosts/${configHostId}/images/prune`, { method: "POST" });
+    if (!res.ok) {
+      imageErrors.value = [`Prune failed (HTTP ${res.status}).`];
+      return;
+    }
+    const body = (await res.json()) as { removed: string[] };
+    if (body.removed.length === 0) {
+      imageErrors.value = ["No unused images found."];
+    }
+    await loadImages(configHostId);
+  }
+
   async function deleteImageFromModal(configHostId: string | null) {
     if (!imageForm.value.id.trim()) {
       return;
@@ -250,6 +257,7 @@ export function useDockerImages() {
     loadImages,
     saveImage,
     deleteImage,
-    deleteImageFromModal
+    deleteImageFromModal,
+    pruneImages
   };
 }

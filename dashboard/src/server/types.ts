@@ -39,7 +39,6 @@ export type EngineConfig = {
     extra_volumes?: string[];
     extra_env?: { key: string; value: string }[];
     extra_run_args?: string[];
-    workdir?: string | null;
     user?: string | null;
     command?: string | null;
     args?: string[];
@@ -56,17 +55,13 @@ export type DockerImage = {
   volumes: string[];
   env: { key: string; value: string }[];
   run_args: string[];
-  workdir?: string | null;
   user?: string | null;
   command?: string | null;
   args: string[];
   pull: boolean;
   remove: boolean;
   build?: {
-    context?: string | null;
-    dockerfile?: string | null;
     dockerfile_content?: string | null;
-    target?: string | null;
     build_args?: { key: string; value: string }[];
     pull?: boolean;
     no_cache?: boolean;

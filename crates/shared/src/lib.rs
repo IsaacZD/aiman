@@ -108,13 +108,12 @@ impl Default for AutoRestart {
 }
 
 /// Docker build settings for containerized engines.
+/// The agent creates a temporary directory, writes `dockerfile_content` as
+/// `Dockerfile` there, and uses that directory as the build context.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct DockerBuild {
-    pub context: Option<String>,
-    pub dockerfile: Option<String>,
     pub dockerfile_content: Option<String>,
-    pub target: Option<String>,
     pub build_args: Vec<EnvVar>,
     pub pull: bool,
     pub no_cache: bool,
@@ -135,7 +134,6 @@ pub struct DockerImage {
     /// GPU device access: "all", "0", "0,1", or "device=<id>".
     /// Maps to bollard HostConfig.device_requests (NVIDIA driver).
     pub gpus: Option<String>,
-    pub workdir: Option<String>,
     pub user: Option<String>,
     pub command: Option<String>,
     pub args: Vec<String>,
@@ -157,7 +155,6 @@ pub struct DockerConfig {
     pub extra_run_args: Vec<String>,
     /// Override image-level GPU setting for this engine instance.
     pub gpus: Option<String>,
-    pub workdir: Option<String>,
     pub user: Option<String>,
     pub command: Option<String>,
     pub args: Vec<String>,
@@ -175,7 +172,6 @@ impl Default for DockerConfig {
             extra_env: Vec::new(),
             extra_run_args: Vec::new(),
             gpus: None,
-            workdir: None,
             user: None,
             command: None,
             args: Vec::new(),

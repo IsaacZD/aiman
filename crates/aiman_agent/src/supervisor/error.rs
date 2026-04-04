@@ -20,6 +20,8 @@ pub enum SupervisorError {
     ImageNotFound,
     #[error("docker image invalid: {0}")]
     ImageInvalid(String),
+    #[error("docker api error: {0}")]
+    DockerApi(String),
 }
 
 pub fn map_supervisor_error(err: SupervisorError) -> axum::http::StatusCode {
@@ -34,5 +36,6 @@ pub fn map_supervisor_error(err: SupervisorError) -> axum::http::StatusCode {
         SupervisorError::ImageInUse => axum::http::StatusCode::CONFLICT,
         SupervisorError::ImageNotFound => axum::http::StatusCode::NOT_FOUND,
         SupervisorError::ImageInvalid(_) => axum::http::StatusCode::BAD_REQUEST,
+        SupervisorError::DockerApi(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

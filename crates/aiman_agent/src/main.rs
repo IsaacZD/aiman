@@ -15,8 +15,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use crate::api::{
     benchmark_engine, create_config, create_image, delete_config, delete_image, engine_log_sessions,
     engine_logs, engine_logs_ws, engine_status_history, get_engine, get_image, hardware_info,
-    health, list_benchmarks, list_configs, list_engines, list_images, scan_models, start_engine,
-    stop_engine, update_config, update_image,
+    health, list_benchmarks, list_configs, list_engines, list_images, prune_images, scan_models,
+    start_engine, stop_engine, update_config, update_image,
 };
 use crate::auth::auth_middleware;
 use crate::hardware::HardwareCache;
@@ -88,6 +88,7 @@ fn main() {
         .route("/v1/configs", get(list_configs).post(create_config))
         .route("/v1/configs/{id}", put(update_config).delete(delete_config))
         .route("/v1/images", get(list_images).post(create_image))
+        .route("/v1/images/prune", post(prune_images))
         .route("/v1/images/{id}", get(get_image).put(update_image).delete(delete_image))
         .route("/v1/engines", get(list_engines))
         .route("/v1/engines/{id}", get(get_engine))
