@@ -144,45 +144,25 @@ export type BenchmarkHostSnapshot = {
 };
 
 export type BenchmarkSettings = {
-  concurrency: number[];
-  requests_per_concurrency: number;
-  prompt: string;
-  prompt_words: number;
-  max_tokens: number;
-  temperature: number;
   model: string;
   api_base_url: string;
-  timeout_seconds: number;
-};
-
-export type BenchmarkResult = {
-  concurrency: number;
-  requests: number;
-  success_count: number;
-  error_count: number;
-  duration_ms: number;
-  avg_latency_ms: number;
-  min_latency_ms: number;
-  max_latency_ms: number;
-  p50_latency_ms: number;
-  p90_latency_ms: number;
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  prompt_tps: number;
-  completion_tps: number;
-  requests_per_sec: number;
-  errors: string[];
+  pp: number[];
+  tg: number[];
+  depth: number[];
+  runs: number;
+  concurrency: number[];
+  prefix_caching: boolean;
+  latency_mode: string;
 };
 
 export type BenchmarkRecord = {
   id: string;
   ts: string;
-  origin?: "host" | "dashboard";
   host?: BenchmarkHostSnapshot | null;
   host_hardware?: HardwareInfo | null;
   engine_config: EngineConfig;
   engine_status: string;
   settings: BenchmarkSettings;
-  results: BenchmarkResult[];
+  // Raw llama-benchy stdout (markdown table).
+  output: string;
 };

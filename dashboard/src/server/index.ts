@@ -296,7 +296,7 @@ server.post("/api/hosts/:hostId/engines/:engineId/stop", async (request, reply) 
   return reply.code(status).send(body);
 });
 
-// Proxy benchmark run to the selected host.
+// Run a benchmark via llama-benchy on the dashboard machine.
 server.post("/api/hosts/:hostId/engines/:engineId/benchmark", async (request, reply) => {
   const { hostId, engineId } = request.params as { hostId: string; engineId: string };
   const host = await findHost(hostId);
@@ -305,38 +305,14 @@ server.post("/api/hosts/:hostId/engines/:engineId/benchmark", async (request, re
   }
 
   const payload = request.body as Record<string, unknown> | null;
-  const mode =
-    payload && "mode" in payload && typeof payload.mode === "string"
-      ? payload.mode
-      : "host";
-
-  if (mode === "dashboard") {
-    try {
-      const record = await runDashboardBenchmark(host, engineId, payload ?? {});
-      await appendDashboardBenchmark(record);
-      return reply.code(200).send({ record });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "benchmark failed";
-      return reply.code(400).send({ error: message });
-    }
+  try {
+    const record = await runDashboardBenchmark(host, engineId, payload ?? {});
+    await appendDashboardBenchmark(record);
+    return reply.code(200).send({ record });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "benchmark failed";
+    return reply.code(400).send({ error: message });
   }
-
-  const settings =
-    payload && "settings" in payload ? (payload as { settings: unknown }).settings : payload;
-  const requestBody = {
-    settings: settings ?? {},
-    host: {
-      id: host.id,
-      name: host.name,
-      base_url: host.base_url
-    }
-  };
-
-  const { status, body } = await proxyRequest(host, `/v1/engines/${engineId}/benchmark`, {
-    method: "POST",
-    body: requestBody
-  });
-  return reply.code(status).send(body);
 });
 
 // Proxy engine log history to the selected host.

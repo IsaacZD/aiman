@@ -3,25 +3,18 @@ import type { Host, EngineItem, BenchmarkRecord } from "../types";
 
 export function createBenchmarkForm() {
   return {
-    mode: "host" as "host" | "dashboard",
-    concurrencyText: "1,2,4,8",
-    requestsPerConcurrency: 8,
-    maxTokens: 256,
-    temperature: 0.2,
+    pp: "512,2048",
+    tg: "32,128",
+    depth: "0",
+    runs: 3,
+    concurrency: "1",
     model: "",
-    promptWords: 120,
-    prompt: "",
     apiBaseUrl: "",
     apiKey: "",
-    timeoutSeconds: 90
+    prefixCaching: false,
+    latencyMode: "generation" as "api" | "generation" | "none",
+    noWarmup: false
   };
-}
-
-function parseConcurrency(input: string): number[] {
-  return input
-    .split(",")
-    .map((value) => Number(value.trim()))
-    .filter((value) => Number.isFinite(value) && value > 0);
 }
 
 export function useBenchmarks() {
@@ -91,23 +84,20 @@ export function useBenchmarks() {
       return;
     }
     benchmarkModalError.value = null;
-    const concurrency = parseConcurrency(benchmarkForm.value.concurrencyText);
-    if (!concurrency.length) {
-      benchmarkModalError.value = "Parallelism must include at least one number.";
-      return;
-    }
 
-    const settings = {
-      concurrency,
-      requests_per_concurrency: benchmarkForm.value.requestsPerConcurrency,
-      max_tokens: benchmarkForm.value.maxTokens,
-      temperature: benchmarkForm.value.temperature,
-      model: benchmarkForm.value.model.trim() || undefined,
-      prompt_words: benchmarkForm.value.promptWords,
-      prompt: benchmarkForm.value.prompt.trim() || undefined,
-      api_base_url: benchmarkForm.value.apiBaseUrl.trim() || undefined,
-      api_key: benchmarkForm.value.apiKey.trim() || undefined,
-      timeout_seconds: benchmarkForm.value.timeoutSeconds
+    const f = benchmarkForm.value;
+    const payload = {
+      pp: f.pp,
+      tg: f.tg,
+      depth: f.depth,
+      runs: f.runs,
+      concurrency: f.concurrency,
+      model: f.model.trim() || undefined,
+      api_base_url: f.apiBaseUrl.trim() || undefined,
+      api_key: f.apiKey.trim() || undefined,
+      prefix_caching: f.prefixCaching,
+      latency_mode: f.latencyMode,
+      no_warmup: f.noWarmup
     };
 
     benchmarkRunning.value = true;
@@ -117,7 +107,7 @@ export function useBenchmarks() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ settings, mode: benchmarkForm.value.mode })
+          body: JSON.stringify(payload)
         }
       );
       if (!res.ok) {

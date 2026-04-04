@@ -17,59 +17,52 @@
       </div>
       <form class="config-form" @submit.prevent="$emit('submit')">
         <label>
-          Run location
-          <select v-model="localForm.mode">
-            <option value="host">Host machine</option>
-            <option value="dashboard">Dashboard machine</option>
-          </select>
-        </label>
-        <label>
-          Parallelism (comma separated)
-          <input v-model="localForm.concurrencyText" type="text" placeholder="1,2,4,8" />
-        </label>
-        <label>
-          Requests per concurrency
-          <input v-model.number="localForm.requestsPerConcurrency" type="number" min="1" />
-        </label>
-        <label>
-          Max tokens
-          <input v-model.number="localForm.maxTokens" type="number" min="1" />
-        </label>
-        <label>
-          Temperature
-          <input v-model.number="localForm.temperature" type="number" min="0" max="2" step="0.1" />
-        </label>
-        <label>
           Model override (optional)
-          <input v-model="localForm.model" type="text" placeholder="leave blank for auto" />
-        </label>
-        <label>
-          Prompt words
-          <input v-model.number="localForm.promptWords" type="number" min="1" />
-        </label>
-        <label>
-          Custom prompt (optional)
-          <textarea
-            v-model="localForm.prompt"
-            rows="3"
-            placeholder="leave blank to auto-generate"
-          ></textarea>
+          <input v-model="localForm.model" type="text" placeholder="leave blank for auto-detect" />
         </label>
         <label>
           API base URL override (optional)
-          <input
-            v-model="localForm.apiBaseUrl"
-            type="text"
-            placeholder="http://127.0.0.1:8000"
-          />
+          <input v-model="localForm.apiBaseUrl" type="text" placeholder="http://127.0.0.1:8000" />
         </label>
         <label>
           API key (optional, not stored)
           <input v-model="localForm.apiKey" type="password" placeholder="engine API key" />
         </label>
         <label>
-          Timeout (seconds)
-          <input v-model.number="localForm.timeoutSeconds" type="number" min="10" />
+          Prompt sizes — <code>--pp</code> (comma separated token counts)
+          <input v-model="localForm.pp" type="text" placeholder="512,2048" />
+        </label>
+        <label>
+          Generation sizes — <code>--tg</code> (comma separated token counts)
+          <input v-model="localForm.tg" type="text" placeholder="32,128" />
+        </label>
+        <label>
+          Context depths — <code>--depth</code> (comma separated token counts)
+          <input v-model="localForm.depth" type="text" placeholder="0" />
+        </label>
+        <label>
+          Concurrency levels (comma separated)
+          <input v-model="localForm.concurrency" type="text" placeholder="1" />
+        </label>
+        <label>
+          Runs per test
+          <input v-model.number="localForm.runs" type="number" min="1" />
+        </label>
+        <label>
+          Latency mode
+          <select v-model="localForm.latencyMode">
+            <option value="generation">generation</option>
+            <option value="api">api</option>
+            <option value="none">none</option>
+          </select>
+        </label>
+        <label class="checkbox-label">
+          <input v-model="localForm.prefixCaching" type="checkbox" />
+          Enable prefix caching
+        </label>
+        <label class="checkbox-label">
+          <input v-model="localForm.noWarmup" type="checkbox" />
+          Skip warmup
         </label>
         <div class="form-actions">
           <button class="ghost" type="button" @click="$emit('close')">Cancel</button>
@@ -89,17 +82,17 @@ const props = defineProps<{
   show: boolean;
   target: EngineItem | null;
   form: {
-    mode: "host" | "dashboard";
-    concurrencyText: string;
-    requestsPerConcurrency: number;
-    maxTokens: number;
-    temperature: number;
+    pp: string;
+    tg: string;
+    depth: string;
+    runs: number;
+    concurrency: string;
     model: string;
-    promptWords: number;
-    prompt: string;
     apiBaseUrl: string;
     apiKey: string;
-    timeoutSeconds: number;
+    prefixCaching: boolean;
+    latencyMode: "api" | "generation" | "none";
+    noWarmup: boolean;
   };
   error: string | null;
   running: boolean;

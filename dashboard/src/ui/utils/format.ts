@@ -144,39 +144,6 @@ export function formatBenchmarkTime(value: string): string {
   return parsed.toLocaleString();
 }
 
-export function formatBenchmarkOrigin(origin?: "host" | "dashboard"): string {
-  return origin === "dashboard" ? "Dashboard run" : "Host run";
-}
-
-export function formatMs(value: number): string {
-  if (!value) {
-    return "—";
-  }
-  if (value >= 1000) {
-    return `${(value / 1000).toFixed(2)}s`;
-  }
-  return `${value}ms`;
-}
-
-export function formatRate(value: number): string {
-  if (!Number.isFinite(value)) {
-    return "—";
-  }
-  if (value >= 100) {
-    return `${Math.round(value)}`;
-  }
-  return value.toFixed(1);
-}
-
-export function truncatePrompt(prompt: string, maxLength = 160): string {
-  if (!prompt) {
-    return "—";
-  }
-  if (prompt.length <= maxLength) {
-    return prompt;
-  }
-  return `${prompt.slice(0, maxLength)}...`;
-}
 
 export function formatSessionLabel(session: LogSession): string {
   const stopped = session.stopped_at ? session.stopped_at : "running";

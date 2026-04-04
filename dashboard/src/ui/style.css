@@ -1033,30 +1033,16 @@ h2 {
   font-size: 0.9rem;
 }
 
-.benchmark-table {
+.benchmark-output {
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  font-size: 0.82rem;
   overflow-x: auto;
-}
-
-.benchmark-table table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.85rem;
-  min-width: 640px;
-}
-
-.benchmark-table th,
-.benchmark-table td {
-  padding: 8px 10px;
-  text-align: left;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.benchmark-table th {
-  color: var(--muted);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 0.7rem;
+  white-space: pre;
+  line-height: 1.5;
 }
 
 @media (max-width: 720px) {
