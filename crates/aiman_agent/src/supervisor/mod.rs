@@ -1,0 +1,446 @@
+mod error;
+mod handle;
+mod store;
+
+pub use error::{map_supervisor_error, SupervisorError};
+pub use handle::EngineHandle;
+pub use store::{read_jsonl, read_log_entries, read_log_sessions};
+
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::Arc,
+};
+
+use aiman_shared::{DockerImage, EngineConfig, EngineInstance, EngineStatus, EngineType};
+use serde::{Deserialize, Serialize};
+use tokio::sync::{Mutex, RwLock};
+
+use self::store::append_jsonl;
+
+#[derive(Clone)]
+// Supervisor holds engine handles and mediates lifecycle control.
+pub struct Supervisor {
+    config_path: PathBuf,
+    data_dir: PathBuf,
+    configs: Arc<RwLock<HashMap<String, EngineConfig>>>,
+    handles: Arc<RwLock<HashMap<String, Arc<EngineHandle>>>>,
+    images: Arc<RwLock<HashMap<String, DockerImage>>>,
+    images_path: PathBuf,
+    benchmark_path: PathBuf,
+    benchmark_write_lock: Arc<Mutex<()>>,
+}
+
+impl Supervisor {
+    pub async fn from_store(
+        config_path: PathBuf,
+        data_dir: PathBuf,
+        seed_path: Option<PathBuf>,
+    ) -> anyhow::Result<Self> {
+        tracing::info!(
+            config_path = %config_path.display(),
+            data_dir = %data_dir.display(),
+            seed_path = seed_path.as_ref().map(|path| path.display().to_string()),
+            "loading engine config store"
+        );
+        // Ensure persistence directories exist.
+        tokio::fs::create_dir_all(data_dir.join("logs")).await?;
+        tokio::fs::create_dir_all(data_dir.join("status")).await?;
+        if let Some(parent) = config_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        let configs_vec = load_config_store(&config_path, seed_path.as_ref()).await?;
+        tracing::info!(count = configs_vec.len(), "loaded engine configs");
+        let images_path = data_dir.join("docker-images.json");
+        let images_vec = load_image_store(&images_path).await?;
+        tracing::info!(count = images_vec.len(), "loaded docker images");
+        let mut configs = HashMap::new();
+        let mut handles = HashMap::new();
+        let images = Arc::new(RwLock::new(images_to_map(&images_vec)));
+        let benchmark_path = data_dir.join("benchmarks.jsonl");
+
+        for config in configs_vec {
+            let id = config.id.clone();
+            tracing::debug!(engine_id = %id, "registering engine config");
+            configs.insert(id.clone(), config.clone());
+            handles.insert(
+                id.clone(),
+                Arc::new(EngineHandle::new(
+                    config,
+                    images.clone(),
+                    data_dir.join("logs").join(format!("{id}.jsonl")),
+                    data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
+                    data_dir.join("status").join(format!("{id}.jsonl")),
+                )),
+            );
+        }
+
+        Ok(Self {
+            config_path,
+            data_dir,
+            configs: Arc::new(RwLock::new(configs)),
+            handles: Arc::new(RwLock::new(handles)),
+            images,
+            images_path,
+            benchmark_path,
+            benchmark_write_lock: Arc::new(Mutex::new(())),
+        })
+    }
+
+    pub async fn list_instances(&self) -> Vec<EngineInstance> {
+        let handles = self.handles.read().await;
+        let mut instances = Vec::with_capacity(handles.len());
+        for handle in handles.values() {
+            instances.push(handle.instance.read().await.clone());
+        }
+        instances
+    }
+
+    pub async fn get_instance(&self, id: &str) -> Option<EngineInstance> {
+        let handles = self.handles.read().await;
+        let handle = handles.get(id)?.clone();
+        let instance = handle.instance.read().await.clone();
+        Some(instance)
+    }
+
+    pub async fn get_handle(&self, id: &str) -> Option<Arc<EngineHandle>> {
+        let handles = self.handles.read().await;
+        handles.get(id).cloned()
+    }
+
+    pub async fn list_configs(&self) -> Vec<EngineConfig> {
+        let configs = self.configs.read().await;
+        let mut values: Vec<_> = configs.values().cloned().collect();
+        values.sort_by(|a, b| a.id.cmp(&b.id));
+        values
+    }
+
+    pub async fn get_config(&self, id: &str) -> Option<EngineConfig> {
+        let configs = self.configs.read().await;
+        configs.get(id).cloned()
+    }
+
+    pub async fn list_images(&self) -> Vec<DockerImage> {
+        let images = self.images.read().await;
+        let mut values: Vec<_> = images.values().cloned().collect();
+        values.sort_by(|a, b| a.id.cmp(&b.id));
+        values
+    }
+
+    pub async fn get_image(&self, id: &str) -> Option<DockerImage> {
+        let images = self.images.read().await;
+        images.get(id).cloned()
+    }
+
+    pub async fn add_image(
+        &self,
+        image: DockerImage,
+    ) -> Result<DockerImage, SupervisorError> {
+        validate_image(&image)?;
+        let mut images = self.images.write().await;
+        if images.contains_key(&image.id) {
+            return Err(SupervisorError::ImageExists);
+        }
+        let id = image.id.clone();
+        images.insert(id.clone(), image.clone());
+        persist_image_store(&self.images_path, &images).await;
+        tracing::info!(image_id = %id, "added docker image");
+        Ok(image)
+    }
+
+    pub async fn update_image(
+        &self,
+        id: &str,
+        image: DockerImage,
+    ) -> Result<DockerImage, SupervisorError> {
+        validate_image(&image)?;
+        if id != image.id {
+            return Err(SupervisorError::ImageInvalid(
+                "image id mismatch".to_string(),
+            ));
+        }
+        let mut images = self.images.write().await;
+        if !images.contains_key(id) {
+            return Err(SupervisorError::ImageNotFound);
+        }
+        images.insert(id.to_string(), image.clone());
+        persist_image_store(&self.images_path, &images).await;
+        tracing::info!(image_id = %id, "updated docker image");
+        Ok(image)
+    }
+
+    pub async fn remove_image(&self, id: &str) -> Result<(), SupervisorError> {
+        let configs = self.configs.read().await;
+        if configs.values().any(|config| {
+            config.engine_type == EngineType::Docker
+                && config
+                    .docker
+                    .as_ref()
+                    .map(|docker| docker.image_id == id)
+                    .unwrap_or(false)
+        }) {
+            return Err(SupervisorError::ImageInUse);
+        }
+        drop(configs);
+        let mut images = self.images.write().await;
+        if images.remove(id).is_none() {
+            return Err(SupervisorError::ImageNotFound);
+        }
+        persist_image_store(&self.images_path, &images).await;
+        tracing::info!(image_id = %id, "removed docker image");
+        Ok(())
+    }
+
+    pub async fn add_config(&self, config: EngineConfig) -> Result<EngineConfig, SupervisorError> {
+        validate_config(&config)?;
+        if matches!(config.engine_type, EngineType::Docker) {
+            let images = self.images.read().await;
+            validate_docker_config(&config, &images)?;
+        }
+        let mut configs = self.configs.write().await;
+        if configs.contains_key(&config.id) {
+            return Err(SupervisorError::ConfigExists);
+        }
+        let mut handles = self.handles.write().await;
+
+        let id = config.id.clone();
+        configs.insert(id.clone(), config.clone());
+        handles.insert(
+            id.clone(),
+            Arc::new(EngineHandle::new(
+                config.clone(),
+                self.images.clone(),
+                self.data_dir.join("logs").join(format!("{id}.jsonl")),
+                self.data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
+                self.data_dir.join("status").join(format!("{id}.jsonl")),
+            )),
+        );
+
+        persist_config_store(&self.config_path, &configs).await;
+        tracing::info!(engine_id = %id, "added engine config");
+        Ok(config)
+    }
+
+    pub async fn update_config(
+        &self,
+        id: &str,
+        config: EngineConfig,
+    ) -> Result<EngineConfig, SupervisorError> {
+        validate_config(&config)?;
+        if matches!(config.engine_type, EngineType::Docker) {
+            let images = self.images.read().await;
+            validate_docker_config(&config, &images)?;
+        }
+        if id != config.id {
+            return Err(SupervisorError::ConfigInvalid(
+                "config id mismatch".to_string(),
+            ));
+        }
+
+        let mut configs = self.configs.write().await;
+        let mut handles = self.handles.write().await;
+
+        let handle = handles.get(id).cloned().ok_or(SupervisorError::NotFound)?;
+        if handle_is_running(&handle).await {
+            return Err(SupervisorError::ConfigInUse);
+        }
+
+        configs.insert(id.to_string(), config.clone());
+        handles.insert(
+            id.to_string(),
+            Arc::new(EngineHandle::new(
+                config.clone(),
+                self.images.clone(),
+                self.data_dir.join("logs").join(format!("{id}.jsonl")),
+                self.data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
+                self.data_dir.join("status").join(format!("{id}.jsonl")),
+            )),
+        );
+
+        persist_config_store(&self.config_path, &configs).await;
+        tracing::info!(engine_id = %id, "updated engine config");
+        Ok(config)
+    }
+
+    pub async fn remove_config(&self, id: &str) -> Result<(), SupervisorError> {
+        let mut configs = self.configs.write().await;
+        let mut handles = self.handles.write().await;
+        let handle = handles.get(id).cloned().ok_or(SupervisorError::NotFound)?;
+        if handle_is_running(&handle).await {
+            return Err(SupervisorError::ConfigInUse);
+        }
+        configs.remove(id);
+        handles.remove(id);
+        persist_config_store(&self.config_path, &configs).await;
+        tracing::info!(engine_id = %id, "removed engine config");
+        Ok(())
+    }
+
+    pub async fn start(&self, id: &str) -> Result<EngineInstance, SupervisorError> {
+        tracing::info!(engine_id = %id, "start requested");
+        let handle = self.get_handle(id).await.ok_or(SupervisorError::NotFound)?;
+        handle.start().await?;
+        let instance = handle.instance.read().await.clone();
+        Ok(instance)
+    }
+
+    pub async fn stop(&self, id: &str) -> Result<EngineInstance, SupervisorError> {
+        tracing::info!(engine_id = %id, "stop requested");
+        let handle = self.get_handle(id).await.ok_or(SupervisorError::NotFound)?;
+        handle.stop().await?;
+        let instance = handle.instance.read().await.clone();
+        Ok(instance)
+    }
+
+    pub fn benchmark_path(&self) -> &PathBuf {
+        &self.benchmark_path
+    }
+
+    pub async fn append_benchmark<T: Serialize>(&self, record: &T) {
+        append_jsonl(&self.benchmark_path, &self.benchmark_write_lock, record).await;
+    }
+}
+
+#[derive(Deserialize)]
+struct ConfigFile {
+    engine: Vec<EngineConfig>,
+}
+
+async fn load_config_store(
+    path: &PathBuf,
+    seed_path: Option<&PathBuf>,
+) -> anyhow::Result<Vec<EngineConfig>> {
+    if let Ok(raw) = tokio::fs::read_to_string(path).await {
+        if raw.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let configs: Vec<EngineConfig> = serde_json::from_str(&raw)?;
+        return Ok(configs);
+    }
+
+    if let Some(seed_path) = seed_path {
+        if let Ok(raw) = tokio::fs::read_to_string(seed_path).await {
+            let parsed: ConfigFile = toml::from_str(&raw)?;
+            let configs = parsed.engine;
+            persist_config_store(path, &configs_to_map(&configs)).await;
+            return Ok(configs);
+        }
+    }
+
+    Ok(Vec::new())
+}
+
+async fn load_image_store(path: &PathBuf) -> anyhow::Result<Vec<DockerImage>> {
+    if let Ok(raw) = tokio::fs::read_to_string(path).await {
+        if raw.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let images: Vec<DockerImage> = serde_json::from_str(&raw)?;
+        return Ok(images);
+    }
+    Ok(Vec::new())
+}
+
+fn configs_to_map(configs: &[EngineConfig]) -> HashMap<String, EngineConfig> {
+    configs
+        .iter()
+        .cloned()
+        .map(|config| (config.id.clone(), config))
+        .collect()
+}
+
+fn images_to_map(images: &[DockerImage]) -> HashMap<String, DockerImage> {
+    images
+        .iter()
+        .cloned()
+        .map(|image| (image.id.clone(), image))
+        .collect()
+}
+
+async fn persist_config_store(path: &PathBuf, configs: &HashMap<String, EngineConfig>) {
+    let mut values: Vec<_> = configs.values().cloned().collect();
+    values.sort_by(|a, b| a.id.cmp(&b.id));
+    if let Ok(serialized) = serde_json::to_string_pretty(&values) {
+        let _ = tokio::fs::write(path, serialized).await;
+    }
+}
+
+async fn persist_image_store(path: &PathBuf, images: &HashMap<String, DockerImage>) {
+    let mut values: Vec<_> = images.values().cloned().collect();
+    values.sort_by(|a, b| a.id.cmp(&b.id));
+    if let Ok(serialized) = serde_json::to_string_pretty(&values) {
+        let _ = tokio::fs::write(path, serialized).await;
+    }
+}
+
+fn validate_config(config: &EngineConfig) -> Result<(), SupervisorError> {
+    if config.id.trim().is_empty() {
+        return Err(SupervisorError::ConfigInvalid("id is required".to_string()));
+    }
+    if config.name.trim().is_empty() {
+        return Err(SupervisorError::ConfigInvalid("name is required".to_string()));
+    }
+    if matches!(config.engine_type, EngineType::Docker) {
+        let docker = config
+            .docker
+            .as_ref()
+            .ok_or_else(|| SupervisorError::ConfigInvalid("docker config is required".to_string()))?;
+        if docker.image_id.trim().is_empty() {
+            return Err(SupervisorError::ConfigInvalid(
+                "docker image id is required".to_string(),
+            ));
+        }
+    } else if config.command.trim().is_empty() {
+        return Err(SupervisorError::ConfigInvalid(
+            "command is required".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_docker_config(
+    config: &EngineConfig,
+    images: &HashMap<String, DockerImage>,
+) -> Result<(), SupervisorError> {
+    let docker = config
+        .docker
+        .as_ref()
+        .ok_or_else(|| SupervisorError::ConfigInvalid("docker config is required".to_string()))?;
+    if !images.contains_key(&docker.image_id) {
+        return Err(SupervisorError::ImageNotFound);
+    }
+    Ok(())
+}
+
+fn validate_image(image: &DockerImage) -> Result<(), SupervisorError> {
+    if image.id.trim().is_empty() {
+        return Err(SupervisorError::ImageInvalid("id is required".to_string()));
+    }
+    if image.name.trim().is_empty() {
+        return Err(SupervisorError::ImageInvalid("name is required".to_string()));
+    }
+    if image.image.trim().is_empty() {
+        return Err(SupervisorError::ImageInvalid("image is required".to_string()));
+    }
+    if let Some(build) = &image.build {
+        if build
+            .context
+            .as_ref()
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(true)
+        {
+            return Err(SupervisorError::ImageInvalid(
+                "build context is required".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn handle_is_running(handle: &EngineHandle) -> bool {
+    matches!(
+        handle.instance.read().await.status,
+        EngineStatus::Running | EngineStatus::Starting
+    )
+}
