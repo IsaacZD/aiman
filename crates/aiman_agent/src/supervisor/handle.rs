@@ -10,7 +10,17 @@ use aiman_shared::{
     AutoRestart, DockerBuild, DockerConfig, DockerImage, EngineConfig, EngineInstance, EngineStatus,
     EngineType, LogEntry, LogSession, LogStream,
 };
+use bollard::{
+    container::LogOutput,
+    models::{ContainerCreateBody, DeviceRequest, HostConfig, PortBinding},
+    query_parameters::{
+        CreateContainerOptions, CreateImageOptions, LogsOptions, RemoveContainerOptions,
+        StartContainerOptions, StopContainerOptions, WaitContainerOptions,
+    },
+    Docker,
+};
 use chrono::Utc;
+use futures_util::StreamExt;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Command,
@@ -28,6 +38,7 @@ const LOG_BUFFER_MAX: usize = 2000;
 pub struct EngineHandle {
     pub(super) config: EngineConfig,
     pub(super) images: Arc<RwLock<HashMap<String, DockerImage>>>,
+    pub(super) docker_client: Arc<Docker>,
     pub(super) instance: Arc<RwLock<EngineInstance>>,
     pub log_buffer: Arc<Mutex<VecDeque<LogEntry>>>,
     pub log_tx: broadcast::Sender<LogEntry>,
@@ -50,6 +61,7 @@ impl EngineHandle {
     pub(super) fn new(
         config: EngineConfig,
         images: Arc<RwLock<HashMap<String, DockerImage>>>,
+        docker_client: Arc<Docker>,
         log_path: PathBuf,
         session_path: PathBuf,
         status_path: PathBuf,
@@ -70,6 +82,7 @@ impl EngineHandle {
         Self {
             config,
             images,
+            docker_client,
             instance: Arc::new(RwLock::new(instance)),
             log_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(LOG_BUFFER_MAX))),
             log_tx,
@@ -125,6 +138,7 @@ impl EngineHandle {
         EngineTaskHandle {
             config: self.config.clone(),
             images: self.images.clone(),
+            docker_client: self.docker_client.clone(),
             instance: self.instance.clone(),
             log_buffer: self.log_buffer.clone(),
             log_tx: self.log_tx.clone(),
@@ -143,6 +157,7 @@ impl EngineHandle {
 struct EngineTaskHandle {
     config: EngineConfig,
     images: Arc<RwLock<HashMap<String, DockerImage>>>,
+    docker_client: Arc<Docker>,
     instance: Arc<RwLock<EngineInstance>>,
     log_buffer: Arc<Mutex<VecDeque<LogEntry>>>,
     log_tx: broadcast::Sender<LogEntry>,
@@ -154,7 +169,7 @@ struct EngineTaskHandle {
     status_write_lock: Arc<Mutex<()>>,
 }
 
-// Spawn and supervise the process with optional auto-restart.
+// Route to Docker API or process-based engine loop.
 async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<bool>) {
     let mut retries = 0;
 
@@ -165,170 +180,18 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
             break;
         }
 
-        tracing::info!(engine_id = %handle.config.id, "starting engine process");
+        tracing::info!(engine_id = %handle.config.id, "starting engine");
         set_status(&handle, EngineStatus::Starting, None, None).await;
 
-        match spawn_process(&handle.config, &handle.images).await {
-            Ok(mut child) => {
-                let pid = child.id();
-                let wait_for_ready = matches!(
-                    handle.config.engine_type,
-                    EngineType::Vllm | EngineType::Lvllm
-                );
-                let ready_marker = if wait_for_ready {
-                    Some("Application startup complete.".to_string())
-                } else {
-                    None
-                };
-                let (ready_tx, mut ready_rx) = watch::channel(false);
-                let session_id = new_session_id();
-                let session_started_at = now();
-                append_session(
-                    &handle.session_path,
-                    &handle.session_write_lock,
-                    &LogSession {
-                        id: session_id.clone(),
-                        started_at: session_started_at.clone(),
-                        stopped_at: None,
-                    },
-                )
-                .await;
-                let mut session_stopped_at: Option<String> = None;
-                tracing::info!(
-                    engine_id = %handle.config.id,
-                    pid = pid,
-                    "engine process spawned"
-                );
-                if wait_for_ready {
-                    set_status(&handle, EngineStatus::Starting, pid, None).await;
-                } else {
-                    set_status(&handle, EngineStatus::Running, pid, Some(now())).await;
-                }
+        let result = if matches!(handle.config.engine_type, EngineType::Docker) {
+            run_docker_engine(&handle, &mut stop_rx).await
+        } else {
+            run_process_engine(&handle, &mut stop_rx).await
+        };
 
-                let mut stdout_task = None;
-                let mut stderr_task = None;
-                let ready_tx = if wait_for_ready { Some(ready_tx) } else { None };
-
-                if let Some(stdout) = child.stdout.take() {
-                    stdout_task = Some(tokio::spawn(stream_logs(
-                        handle.clone(),
-                        BufReader::new(stdout),
-                        LogStream::Stdout,
-                        session_id.clone(),
-                        ready_tx.clone(),
-                        ready_marker.clone(),
-                    )));
-                }
-                if let Some(stderr) = child.stderr.take() {
-                    stderr_task = Some(tokio::spawn(stream_logs(
-                        handle.clone(),
-                        BufReader::new(stderr),
-                        LogStream::Stderr,
-                        session_id.clone(),
-                        ready_tx.clone(),
-                        ready_marker.clone(),
-                    )));
-                }
-
-                let mut should_monitor = true;
-                if wait_for_ready {
-                    let wait_for_ready = async {
-                        loop {
-                            if *ready_rx.borrow() {
-                                return true;
-                            }
-                            if ready_rx.changed().await.is_err() {
-                                return false;
-                            }
-                        }
-                    };
-
-                    tokio::select! {
-                        ready = wait_for_ready => {
-                            if ready {
-                                set_status(&handle, EngineStatus::Running, pid, Some(now())).await;
-                            }
-                        }
-                        _ = stop_rx.changed() => {
-                            if *stop_rx.borrow() {
-                                tracing::info!(
-                                    engine_id = %handle.config.id,
-                                    pid = pid,
-                                    "stop signal received; terminating engine process"
-                                );
-                                stop_engine_process(&handle, &mut child).await;
-                                set_status(&handle, EngineStatus::Stopped, None, None).await;
-                                should_monitor = false;
-                                session_stopped_at = Some(now());
-                            }
-                        }
-                        status = child.wait() => {
-                            let code = status.ok().and_then(|s| s.code());
-                            tracing::info!(
-                                engine_id = %handle.config.id,
-                                pid = pid,
-                                exit_code = code,
-                                "engine process exited"
-                            );
-                            set_exit_status(&handle, code).await;
-                            should_monitor = false;
-                            session_stopped_at = Some(now());
-                        }
-                    }
-                }
-
-                if should_monitor {
-                    tokio::select! {
-                        _ = stop_rx.changed() => {
-                            if *stop_rx.borrow() {
-                                tracing::info!(
-                                    engine_id = %handle.config.id,
-                                    pid = pid,
-                                    "stop signal received; terminating engine process"
-                                );
-                                stop_engine_process(&handle, &mut child).await;
-                                set_status(&handle, EngineStatus::Stopped, None, None).await;
-                                session_stopped_at = Some(now());
-                            }
-                        }
-                        status = child.wait() => {
-                            let code = status.ok().and_then(|s| s.code());
-                            tracing::info!(
-                                engine_id = %handle.config.id,
-                                pid = pid,
-                                exit_code = code,
-                                "engine process exited"
-                            );
-                            set_exit_status(&handle, code).await;
-                            session_stopped_at = Some(now());
-                        }
-                    }
-                }
-
-                let session_stopped_at =
-                    session_stopped_at.unwrap_or_else(|| now());
-                append_session(
-                    &handle.session_path,
-                    &handle.session_write_lock,
-                    &LogSession {
-                        id: session_id,
-                        started_at: session_started_at,
-                        stopped_at: Some(session_stopped_at),
-                    },
-                )
-                .await;
-
-                if let Some(task) = stdout_task {
-                    let _ = task.await;
-                }
-                if let Some(task) = stderr_task {
-                    let _ = task.await;
-                }
-            }
-            Err(err) => {
-                set_status(&handle, EngineStatus::Error, None, None).await;
-                tracing::warn!(error = %err, "failed to spawn engine");
-            }
+        if let Err(err) = result {
+            set_status(&handle, EngineStatus::Error, None, None).await;
+            tracing::warn!(error = %err, engine_id = %handle.config.id, "engine error");
         }
 
         if should_restart(&handle.config.auto_restart, retries) {
@@ -348,17 +211,623 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
     }
 }
 
-// Build and spawn the engine child process.
-async fn spawn_process(
-    config: &EngineConfig,
-    images: &Arc<RwLock<HashMap<String, DockerImage>>>,
-) -> anyhow::Result<tokio::process::Child> {
-    if matches!(config.engine_type, EngineType::Docker) {
-        let image = resolve_docker_image(config, images).await?;
-        let resolved = resolve_docker_spec(config, &image);
-        return spawn_docker_process(config, &resolved).await;
+// ── Docker engine (bollard) ───────────────────────────────────────────────────
+
+async fn run_docker_engine(
+    handle: &Arc<EngineTaskHandle>,
+    stop_rx: &mut watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    let image = resolve_docker_image(&handle.config, &handle.images).await?;
+    let resolved = resolve_docker_spec(&handle.config, &image);
+
+    // Build phase (CLI — tar streaming is complex, keep as-is).
+    if let Some(build) = &resolved.build {
+        build_docker_image(&handle.config, build, &resolved.image).await?;
+    } else if resolved.pull {
+        stream_docker_pull(handle, &resolved.image).await?;
     }
 
+    // Container name: prefer explicit config, fall back to engine id.
+    let container_name = handle
+        .config
+        .docker
+        .as_ref()
+        .map(|d| docker_container_name(&handle.config, d))
+        .unwrap_or_else(|| handle.config.id.clone());
+
+    // Create container.
+    let container_id =
+        create_docker_container(handle, &resolved, &container_name).await?;
+
+    // Start container.
+    handle
+        .docker_client
+        .start_container(&container_id, None::<StartContainerOptions>)
+        .await
+        .context("failed to start container")?;
+
+    tracing::info!(
+        engine_id = %handle.config.id,
+        container_id = %container_id,
+        "docker container started"
+    );
+
+    let session_id = new_session_id();
+    let session_started_at = now();
+    append_session(
+        &handle.session_path,
+        &handle.session_write_lock,
+        &LogSession {
+            id: session_id.clone(),
+            started_at: session_started_at.clone(),
+            stopped_at: None,
+        },
+    )
+    .await;
+
+    // Determine whether we wait for a ready marker before setting Running.
+    let wait_for_ready = matches!(
+        handle.config.engine_type,
+        EngineType::Vllm | EngineType::Lvllm
+    );
+    let ready_marker = if wait_for_ready {
+        Some("Application startup complete.".to_string())
+    } else {
+        None
+    };
+    let (ready_tx, mut ready_rx) = watch::channel(false);
+    let ready_tx_opt = if wait_for_ready { Some(ready_tx) } else { None };
+
+    if wait_for_ready {
+        set_status(handle, EngineStatus::Starting, None, None).await;
+    } else {
+        set_status(handle, EngineStatus::Running, None, Some(now())).await;
+    }
+
+    // Spawn log streaming task.
+    let log_task = {
+        let handle = handle.clone();
+        let container_id = container_id.clone();
+        let session_id = session_id.clone();
+        tokio::spawn(async move {
+            stream_container_logs(handle, container_id, session_id, ready_tx_opt, ready_marker)
+                .await;
+        })
+    };
+
+    // Spawn health polling task.
+    let health_task = {
+        let handle = handle.clone();
+        let container_id = container_id.clone();
+        tokio::spawn(async move {
+            poll_container_health(handle, container_id).await;
+        })
+    };
+
+    let mut session_stopped_at: Option<String> = None;
+
+    // Wait for ready marker if needed.
+    if wait_for_ready {
+        let wait_ready = async {
+            loop {
+                if *ready_rx.borrow() {
+                    return true;
+                }
+                if ready_rx.changed().await.is_err() {
+                    return false;
+                }
+            }
+        };
+
+        tokio::select! {
+            ready = wait_ready => {
+                if ready {
+                    set_status(handle, EngineStatus::Running, None, Some(now())).await;
+                }
+            }
+            _ = stop_rx.changed() => {
+                if *stop_rx.borrow() {
+                    stop_docker_container_api(&handle.docker_client, &container_id).await;
+                    if resolved.remove {
+                        remove_docker_container(&handle.docker_client, &container_id).await;
+                    }
+                    set_status(handle, EngineStatus::Stopped, None, None).await;
+                    session_stopped_at = Some(now());
+                    finalize_session(handle, session_id, session_started_at, session_stopped_at, log_task, health_task).await;
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    // Wait for container exit or stop signal.
+    let mut wait_stream = handle
+        .docker_client
+        .wait_container(&container_id, None::<WaitContainerOptions>);
+
+    tokio::select! {
+        _ = stop_rx.changed() => {
+            if *stop_rx.borrow() {
+                tracing::info!(
+                    engine_id = %handle.config.id,
+                    container_id = %container_id,
+                    "stop signal received; stopping container"
+                );
+                stop_docker_container_api(&handle.docker_client, &container_id).await;
+                if resolved.remove {
+                    remove_docker_container(&handle.docker_client, &container_id).await;
+                }
+                set_status(handle, EngineStatus::Stopped, None, None).await;
+                session_stopped_at = Some(now());
+            }
+        }
+        result = wait_stream.next() => {
+            let code = result
+                .and_then(|r| r.ok())
+                .map(|r| i32::try_from(r.status_code).unwrap_or(-1));
+            tracing::info!(
+                engine_id = %handle.config.id,
+                container_id = %container_id,
+                exit_code = code,
+                "docker container exited"
+            );
+            if resolved.remove {
+                remove_docker_container(&handle.docker_client, &container_id).await;
+            }
+            set_exit_status(handle, code).await;
+            session_stopped_at = Some(now());
+        }
+    }
+
+    finalize_session(
+        handle,
+        session_id,
+        session_started_at,
+        session_stopped_at,
+        log_task,
+        health_task,
+    )
+    .await;
+    Ok(())
+}
+
+async fn finalize_session(
+    handle: &Arc<EngineTaskHandle>,
+    session_id: String,
+    session_started_at: String,
+    session_stopped_at: Option<String>,
+    log_task: JoinHandle<()>,
+    health_task: JoinHandle<()>,
+) {
+    let stopped_at = session_stopped_at.unwrap_or_else(now);
+    append_session(
+        &handle.session_path,
+        &handle.session_write_lock,
+        &LogSession {
+            id: session_id,
+            started_at: session_started_at,
+            stopped_at: Some(stopped_at),
+        },
+    )
+    .await;
+    health_task.abort();
+    let _ = log_task.await;
+}
+
+/// Stream pull progress lines into the log buffer so the UI can show them.
+async fn stream_docker_pull(
+    handle: &Arc<EngineTaskHandle>,
+    image: &str,
+) -> anyhow::Result<()> {
+    let image = image.trim();
+    if image.is_empty() {
+        anyhow::bail!("docker image is required for pull");
+    }
+    tracing::info!(engine_id = %handle.config.id, image = %image, "pulling docker image");
+
+    let session_id = new_session_id();
+    let mut stream = handle.docker_client.create_image(
+        Some(CreateImageOptions {
+            from_image: Some(image.to_string()),
+            ..Default::default()
+        }),
+        None,
+        None,
+    );
+
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(info) => {
+                let status = info.status.as_deref().unwrap_or("").trim().to_string();
+                let progress = info
+                    .progress_detail
+                    .as_ref()
+                    .and_then(|d| {
+                        let cur = d.current.unwrap_or(0);
+                        let tot = d.total.unwrap_or(0);
+                        if tot > 0 {
+                            Some(format!("{cur}/{tot}"))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default();
+                let line = if progress.is_empty() {
+                    status
+                } else {
+                    format!("{status} {progress}")
+                };
+                if !line.is_empty() {
+                    emit_log(handle, LogStream::Stdout, &session_id, line).await;
+                }
+            }
+            Err(err) => {
+                anyhow::bail!("docker pull failed: {err}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Build the bollard container config and call create_container.
+async fn create_docker_container(
+    handle: &Arc<EngineTaskHandle>,
+    resolved: &ResolvedDockerSpec,
+    container_name: &str,
+) -> anyhow::Result<String> {
+    // Port bindings: "host:container" or "host:container/proto".
+    let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
+    let mut exposed_port_list: Vec<String> = Vec::new();
+    for port_spec in &resolved.ports {
+        let spec = port_spec.trim();
+        if spec.is_empty() {
+            continue;
+        }
+        // Format: [host_ip:]host_port:container_port[/proto]
+        let parts: Vec<&str> = spec.splitn(3, ':').collect();
+        let (host_port, container_port_proto) = match parts.len() {
+            2 => (parts[0], parts[1]),
+            3 => (parts[1], parts[2]),
+            _ => continue,
+        };
+        // container_port may include /proto; add default /tcp if not.
+        let container_key = if container_port_proto.contains('/') {
+            container_port_proto.to_string()
+        } else {
+            format!("{container_port_proto}/tcp")
+        };
+        exposed_port_list.push(container_key.clone());
+        port_bindings.insert(
+            container_key,
+            Some(vec![PortBinding {
+                host_ip: None,
+                host_port: Some(host_port.to_string()),
+            }]),
+        );
+    }
+
+    // Volume bindings: "/host:/container[:options]"
+    let binds: Vec<String> = resolved
+        .volumes
+        .iter()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .collect();
+
+    // GPU device requests.
+    let device_requests = resolved.gpus.as_deref().map(|gpus| {
+        let count = if gpus == "all" {
+            -1
+        } else {
+            gpus.split(',').count() as i64
+        };
+        vec![DeviceRequest {
+            driver: Some("nvidia".into()),
+            count: Some(count),
+            capabilities: Some(vec![vec!["gpu".into()]]),
+            ..Default::default()
+        }]
+    });
+
+    let host_config = HostConfig {
+        port_bindings: if port_bindings.is_empty() {
+            None
+        } else {
+            Some(port_bindings)
+        },
+        binds: if binds.is_empty() { None } else { Some(binds) },
+        device_requests,
+        ..Default::default()
+    };
+
+    // Env: "KEY=VALUE"
+    let env: Vec<String> = resolved
+        .env
+        .iter()
+        .filter(|e| !e.key.trim().is_empty())
+        .map(|e| format!("{}={}", e.key, e.value))
+        .collect();
+
+    // Command: entrypoint override + args.
+    let cmd: Option<Vec<String>> = {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(command) = resolved
+            .command
+            .as_ref()
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+        {
+            parts.extend(split_command_input(command));
+        }
+        for arg in &resolved.args {
+            parts.extend(split_command_input(arg));
+        }
+        if parts.is_empty() { None } else { Some(parts) }
+    };
+
+    let config = ContainerCreateBody {
+        image: Some(resolved.image.trim().to_string()),
+        cmd,
+        env: if env.is_empty() { None } else { Some(env) },
+        working_dir: resolved
+            .workdir
+            .as_ref()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
+        user: resolved
+            .user
+            .as_ref()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
+        exposed_ports: if exposed_port_list.is_empty() {
+            None
+        } else {
+            Some(exposed_port_list)
+        },
+        host_config: Some(host_config),
+        ..Default::default()
+    };
+
+    let options = CreateContainerOptions {
+        name: Some(container_name.to_string()),
+        platform: String::new(),
+    };
+
+    let response = handle
+        .docker_client
+        .create_container(Some(options), config)
+        .await
+        .context("failed to create container")?;
+
+    Ok(response.id)
+}
+
+/// Stream container stdout/stderr via bollard into the log buffer.
+async fn stream_container_logs(
+    handle: Arc<EngineTaskHandle>,
+    container_id: String,
+    session_id: String,
+    ready_tx: Option<watch::Sender<bool>>,
+    ready_marker: Option<String>,
+) {
+    let mut logs = handle.docker_client.logs(
+        &container_id,
+        Some(LogsOptions {
+            follow: true,
+            stdout: true,
+            stderr: true,
+            timestamps: false,
+            ..Default::default()
+        }),
+    );
+
+    while let Some(result) = logs.next().await {
+        let (stream, bytes) = match result {
+            Ok(LogOutput::StdOut { message }) => (LogStream::Stdout, message),
+            Ok(LogOutput::StdErr { message }) => (LogStream::Stderr, message),
+            Ok(_) => continue,
+            Err(err) => {
+                tracing::debug!(engine_id = %handle.config.id, error = %err, "log stream error");
+                break;
+            }
+        };
+        let line = String::from_utf8_lossy(&bytes).trim_end_matches('\n').to_string();
+        if line.is_empty() {
+            continue;
+        }
+        if let (Some(tx), Some(marker)) = (&ready_tx, &ready_marker) {
+            if line.contains(marker) {
+                let _ = tx.send(true);
+            }
+        }
+        emit_log(&handle, stream, &session_id, line).await;
+    }
+
+    tracing::debug!(engine_id = %handle.config.id, "container log stream ended");
+}
+
+/// Poll container health status every 30 s and update EngineInstance.health.
+async fn poll_container_health(handle: Arc<EngineTaskHandle>, container_id: String) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        match handle.docker_client.inspect_container(&container_id, None).await {
+            Ok(info) => {
+                let health_status = info
+                    .state
+                    .and_then(|s| s.health)
+                    .and_then(|h| h.status)
+                    .map(|s| s.to_string());
+                if let Some(status) = health_status {
+                    let mut instance = handle.instance.write().await;
+                    instance.health = Some(status);
+                }
+            }
+            Err(_) => break, // Container gone; task will be aborted anyway.
+        }
+    }
+}
+
+async fn stop_docker_container_api(docker: &Docker, container_id: &str) {
+    let options = StopContainerOptions { t: Some(10), signal: None };
+    if let Err(err) = docker.stop_container(container_id, Some(options)).await {
+        tracing::warn!(container_id = %container_id, error = %err, "failed to stop container");
+    }
+}
+
+async fn remove_docker_container(docker: &Docker, container_id: &str) {
+    let options = RemoveContainerOptions { force: true, ..Default::default() };
+    if let Err(err) = docker.remove_container(container_id, Some(options)).await {
+        tracing::warn!(container_id = %container_id, error = %err, "failed to remove container");
+    }
+}
+
+// ── Process engine (non-Docker) ──────────────────────────────────────────────
+
+async fn run_process_engine(
+    handle: &Arc<EngineTaskHandle>,
+    stop_rx: &mut watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    let mut child = spawn_process(&handle.config).await?;
+    let pid = child.id();
+    let wait_for_ready = matches!(
+        handle.config.engine_type,
+        EngineType::Vllm | EngineType::Lvllm
+    );
+    let ready_marker = if wait_for_ready {
+        Some("Application startup complete.".to_string())
+    } else {
+        None
+    };
+    let (ready_tx, mut ready_rx) = watch::channel(false);
+    let session_id = new_session_id();
+    let session_started_at = now();
+    append_session(
+        &handle.session_path,
+        &handle.session_write_lock,
+        &LogSession {
+            id: session_id.clone(),
+            started_at: session_started_at.clone(),
+            stopped_at: None,
+        },
+    )
+    .await;
+    let mut session_stopped_at: Option<String> = None;
+    tracing::info!(
+        engine_id = %handle.config.id,
+        pid = pid,
+        "engine process spawned"
+    );
+    if wait_for_ready {
+        set_status(handle, EngineStatus::Starting, pid, None).await;
+    } else {
+        set_status(handle, EngineStatus::Running, pid, Some(now())).await;
+    }
+
+    let mut stdout_task = None;
+    let mut stderr_task = None;
+    let ready_tx = if wait_for_ready { Some(ready_tx) } else { None };
+
+    if let Some(stdout) = child.stdout.take() {
+        stdout_task = Some(tokio::spawn(stream_logs(
+            handle.clone(),
+            BufReader::new(stdout),
+            LogStream::Stdout,
+            session_id.clone(),
+            ready_tx.clone(),
+            ready_marker.clone(),
+        )));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        stderr_task = Some(tokio::spawn(stream_logs(
+            handle.clone(),
+            BufReader::new(stderr),
+            LogStream::Stderr,
+            session_id.clone(),
+            ready_tx.clone(),
+            ready_marker.clone(),
+        )));
+    }
+
+    let mut should_monitor = true;
+    if wait_for_ready {
+        let wait_ready = async {
+            loop {
+                if *ready_rx.borrow() {
+                    return true;
+                }
+                if ready_rx.changed().await.is_err() {
+                    return false;
+                }
+            }
+        };
+
+        tokio::select! {
+            ready = wait_ready => {
+                if ready {
+                    set_status(handle, EngineStatus::Running, pid, Some(now())).await;
+                }
+            }
+            _ = stop_rx.changed() => {
+                if *stop_rx.borrow() {
+                    tracing::info!(engine_id = %handle.config.id, pid = pid, "stop signal received");
+                    terminate_process_tree(&mut child).await;
+                    set_status(handle, EngineStatus::Stopped, None, None).await;
+                    should_monitor = false;
+                    session_stopped_at = Some(now());
+                }
+            }
+            status = child.wait() => {
+                let code = status.ok().and_then(|s| s.code());
+                tracing::info!(engine_id = %handle.config.id, pid = pid, exit_code = code, "engine process exited");
+                set_exit_status(handle, code).await;
+                should_monitor = false;
+                session_stopped_at = Some(now());
+            }
+        }
+    }
+
+    if should_monitor {
+        tokio::select! {
+            _ = stop_rx.changed() => {
+                if *stop_rx.borrow() {
+                    tracing::info!(engine_id = %handle.config.id, pid = pid, "stop signal received");
+                    terminate_process_tree(&mut child).await;
+                    set_status(handle, EngineStatus::Stopped, None, None).await;
+                    session_stopped_at = Some(now());
+                }
+            }
+            status = child.wait() => {
+                let code = status.ok().and_then(|s| s.code());
+                tracing::info!(engine_id = %handle.config.id, pid = pid, exit_code = code, "engine process exited");
+                set_exit_status(handle, code).await;
+                session_stopped_at = Some(now());
+            }
+        }
+    }
+
+    let stopped_at = session_stopped_at.unwrap_or_else(now);
+    append_session(
+        &handle.session_path,
+        &handle.session_write_lock,
+        &LogSession {
+            id: session_id,
+            started_at: session_started_at,
+            stopped_at: Some(stopped_at),
+        },
+    )
+    .await;
+
+    if let Some(task) = stdout_task {
+        let _ = task.await;
+    }
+    if let Some(task) = stderr_task {
+        let _ = task.await;
+    }
+    Ok(())
+}
+
+// Build and spawn the engine child process (non-Docker).
+async fn spawn_process(config: &EngineConfig) -> anyhow::Result<tokio::process::Child> {
     tracing::debug!(
         engine_id = %config.id,
         command = %config.command,
@@ -457,16 +926,18 @@ fn split_command_input(input: &str) -> Vec<String> {
     tokens
 }
 
+// ── Docker spec resolution ────────────────────────────────────────────────────
+
 struct ResolvedDockerSpec {
     image: String,
     ports: Vec<String>,
     volumes: Vec<String>,
     env: Vec<aiman_shared::EnvVar>,
-    run_args: Vec<String>,
     workdir: Option<String>,
     user: Option<String>,
     command: Option<String>,
     args: Vec<String>,
+    gpus: Option<String>,
     pull: bool,
     remove: bool,
     build: Option<DockerBuild>,
@@ -490,16 +961,13 @@ async fn resolve_docker_image(
 fn resolve_docker_spec(config: &EngineConfig, image: &DockerImage) -> ResolvedDockerSpec {
     let docker = config.docker.as_ref();
     let extra_ports = docker
-        .map(|docker| docker.extra_ports.clone())
+        .map(|d| d.extra_ports.clone())
         .unwrap_or_default();
     let extra_volumes = docker
-        .map(|docker| docker.extra_volumes.clone())
+        .map(|d| d.extra_volumes.clone())
         .unwrap_or_default();
     let extra_env = docker
-        .map(|docker| docker.extra_env.clone())
-        .unwrap_or_default();
-    let extra_run_args = docker
-        .map(|docker| docker.extra_run_args.clone())
+        .map(|d| d.extra_env.clone())
         .unwrap_or_default();
 
     let mut ports = image.ports.clone();
@@ -509,203 +977,67 @@ fn resolve_docker_spec(config: &EngineConfig, image: &DockerImage) -> ResolvedDo
     let mut env = image.env.clone();
     env.extend(extra_env);
     env.extend(config.env.clone());
-    let mut run_args = image.run_args.clone();
-    run_args.extend(extra_run_args);
 
     let pull = docker
-        .and_then(|docker| docker.pull)
+        .and_then(|d| d.pull)
         .unwrap_or(image.pull);
     let remove = docker
-        .and_then(|docker| docker.remove)
+        .and_then(|d| d.remove)
         .unwrap_or(image.remove);
 
     let workdir = docker
-        .and_then(|docker| docker.workdir.clone())
-        .filter(|value| !value.trim().is_empty())
+        .and_then(|d| d.workdir.clone())
+        .filter(|v| !v.trim().is_empty())
         .or_else(|| image.workdir.clone());
     let user = docker
-        .and_then(|docker| docker.user.clone())
-        .filter(|value| !value.trim().is_empty())
+        .and_then(|d| d.user.clone())
+        .filter(|v| !v.trim().is_empty())
         .or_else(|| image.user.clone());
     let command = docker
-        .and_then(|docker| docker.command.clone())
-        .filter(|value| !value.trim().is_empty())
+        .and_then(|d| d.command.clone())
+        .filter(|v| !v.trim().is_empty())
         .or_else(|| image.command.clone());
 
     let mut args = image.args.clone();
-    if let Some(docker) = docker {
-        args.extend(docker.args.iter().cloned());
+    if let Some(d) = docker {
+        args.extend(d.args.iter().cloned());
     }
+
+    // DockerConfig.gpus overrides image-level gpus when set.
+    let gpus = docker
+        .and_then(|d| d.gpus.clone())
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| image.gpus.clone());
 
     ResolvedDockerSpec {
         image: image.image.clone(),
         ports,
         volumes,
         env,
-        run_args,
         workdir,
         user,
         command,
         args,
+        gpus,
         pull,
         remove,
         build: image.build.clone(),
     }
 }
 
-async fn spawn_docker_process(
-    config: &EngineConfig,
-    docker: &ResolvedDockerSpec,
-) -> anyhow::Result<tokio::process::Child> {
-    let runtime = docker_runtime_command(config);
-
-    if let Some(build) = &docker.build {
-        build_docker_image(&runtime, config, build, &docker.image).await?;
-    } else if docker.pull {
-        pull_docker_image(&runtime, config, &docker.image).await?;
-    }
-
-    tracing::debug!(
-        engine_id = %config.id,
-        runtime = %runtime,
-        image = %docker.image,
-        "spawning docker engine process"
-    );
-
-    let mut args: Vec<String> = Vec::new();
-    args.push("run".to_string());
-    if docker.remove {
-        args.push("--rm".to_string());
-    }
-
-    let container_name = config
-        .docker
-        .as_ref()
-        .map(|docker| docker_container_name(config, docker))
-        .unwrap_or_else(|| config.id.clone());
-    if !container_name.is_empty() {
-        args.push("--name".to_string());
-        args.push(container_name);
-    }
-
-    for port in docker.ports.iter().map(|value| value.trim()).filter(|value| !value.is_empty()) {
-        args.push("-p".to_string());
-        args.push(port.to_string());
-    }
-
-    for volume in docker
-        .volumes
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        args.push("-v".to_string());
-        args.push(volume.to_string());
-    }
-
-    if let Some(workdir) = docker
-        .workdir
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        args.push("-w".to_string());
-        args.push(workdir.to_string());
-    }
-
-    if let Some(user) = docker
-        .user
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        args.push("-u".to_string());
-        args.push(user.to_string());
-    }
-
-    for env in &docker.env {
-        if !env.key.trim().is_empty() {
-            args.push("-e".to_string());
-            args.push(format!("{}={}", env.key, env.value));
-        }
-    }
-
-    for arg in &docker.run_args {
-        args.extend(split_command_input(arg));
-    }
-
-    let image = docker.image.trim();
-    if image.is_empty() {
-        anyhow::bail!("docker image is required");
-    }
-    args.push(image.to_string());
-
-    if let Some(command) = docker
-        .command
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        args.extend(split_command_input(command));
-    }
-
-    for arg in &docker.args {
-        args.extend(split_command_input(arg));
-    }
-
-    let mut command = docker_command(&runtime);
-    command.args(args);
-
-    if let Some(dir) = &config.working_dir {
-        command.current_dir(dir);
-    }
-
-    #[cfg(unix)]
-    {
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setpgid(0, 0) == 0 {
-                    Ok(())
-                } else {
-                    Err(std::io::Error::last_os_error())
-                }
-            });
-        }
-    }
-
-    let child = command
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()?;
-
-    Ok(child)
-}
-
-fn docker_runtime_command(config: &EngineConfig) -> String {
-    let trimmed = config.command.trim();
-    if !trimmed.is_empty() {
-        return trimmed.to_string();
-    }
-    if let Ok(value) = std::env::var("AIMAN_DOCKER_RUNTIME") {
-        if !value.trim().is_empty() {
-            return value;
-        }
-    }
-    "docker".to_string()
-}
-
 fn docker_container_name(config: &EngineConfig, docker: &DockerConfig) -> String {
     docker
         .container_name
         .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string())
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string())
         .unwrap_or_else(|| config.id.clone())
 }
 
+// ── Docker image build (CLI — kept for tar-context simplicity) ────────────────
+
 async fn build_docker_image(
-    runtime: &str,
     config: &EngineConfig,
     build: &DockerBuild,
     image: &str,
@@ -719,7 +1051,7 @@ async fn build_docker_image(
         anyhow::bail!("docker image is required for build");
     }
 
-    let mut command = docker_command(runtime);
+    let mut command = Command::new("docker");
     command.arg("build").arg("-t").arg(image);
     if build.pull {
         command.arg("--pull");
@@ -730,17 +1062,17 @@ async fn build_docker_image(
     if let Some(target) = build
         .target
         .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
     {
         command.arg("--target").arg(target);
     }
-    let mut temp_dockerfile: Option<PathBuf> = None;
+    let mut temp_dockerfile: Option<std::path::PathBuf> = None;
     if let Some(content) = build
         .dockerfile_content
         .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
     {
         let filename = format!(
             "aiman-dockerfile-{}-{}.Dockerfile",
@@ -757,8 +1089,8 @@ async fn build_docker_image(
     } else if let Some(dockerfile) = build
         .dockerfile
         .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
     {
         command.arg("-f").arg(dockerfile);
     }
@@ -792,106 +1124,29 @@ async fn build_docker_image(
     Ok(())
 }
 
-async fn pull_docker_image(
-    runtime: &str,
-    config: &EngineConfig,
-    image: &str,
-) -> anyhow::Result<()> {
-    let image = image.trim();
-    if image.is_empty() {
-        anyhow::bail!("docker image is required for pull");
-    }
-    let mut command = docker_command(runtime);
-    command.arg("pull").arg(image);
-    if let Some(dir) = &config.working_dir {
-        command.current_dir(dir);
-    }
-    let output = command.output().await?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let detail = if !stderr.trim().is_empty() {
-            stderr.trim()
-        } else {
-            stdout.trim()
-        };
-        anyhow::bail!("docker pull failed: {}", detail);
-    }
-    Ok(())
-}
+// ── Shared log helpers ────────────────────────────────────────────────────────
 
-async fn stop_engine_process(handle: &EngineTaskHandle, child: &mut tokio::process::Child) {
-    if matches!(handle.config.engine_type, EngineType::Docker) {
-        if let Err(err) = stop_docker_container(&handle.config).await {
-            tracing::warn!(
-                engine_id = %handle.config.id,
-                error = %err,
-                "failed to stop docker container"
-            );
-        }
-    }
-    terminate_process_tree(child).await;
-}
-
-async fn stop_docker_container(config: &EngineConfig) -> anyhow::Result<()> {
-    let docker = match &config.docker {
-        Some(docker) => docker,
-        None => return Ok(()),
+async fn emit_log(
+    handle: &Arc<EngineTaskHandle>,
+    stream: LogStream,
+    session_id: &str,
+    line: String,
+) {
+    let entry = LogEntry {
+        ts: now(),
+        session_id: session_id.to_string(),
+        stream,
+        line,
     };
-    let container_name = docker_container_name(config, docker);
-    if container_name.trim().is_empty() {
-        return Ok(());
-    }
-    let runtime = docker_runtime_command(config);
-    let mut command = docker_command(&runtime);
-    command.arg("stop").arg(container_name);
-    if let Some(dir) = &config.working_dir {
-        command.current_dir(dir);
-    }
-    let _ = command.output().await;
-    Ok(())
-}
-
-fn docker_command(runtime: &str) -> Command {
-    let mut parts = split_command_input(runtime);
-    let command_name = parts
-        .first()
-        .cloned()
-        .unwrap_or_else(|| runtime.to_string());
-    if !parts.is_empty() {
-        parts.remove(0);
-    }
-    let mut command = Command::new(command_name);
-    if !parts.is_empty() {
-        command.args(parts);
-    }
-    command
-}
-
-async fn terminate_process_tree(child: &mut tokio::process::Child) {
-    #[cfg(unix)]
     {
-        if let Some(pid) = child.id() {
-            let pgid = pid as i32;
-            unsafe {
-                // SIGTERM process group first.
-                libc::killpg(pgid, libc::SIGTERM);
-            }
-            let wait_result =
-                tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
-            if wait_result.is_err() {
-                unsafe {
-                    libc::killpg(pgid, libc::SIGKILL);
-                }
-                let _ = child.wait().await;
-            }
-            return;
+        let mut buffer = handle.log_buffer.lock().await;
+        if buffer.len() >= LOG_BUFFER_MAX {
+            buffer.pop_front();
         }
+        buffer.push_back(entry.clone());
     }
-
-    // Fallback for non-unix or missing pid.
-    let _ = child.kill().await;
-    let _ = child.wait().await;
+    append_jsonl(&handle.log_path, &handle.log_write_lock, &entry).await;
+    let _ = handle.log_tx.send(entry);
 }
 
 // Read log lines, store to buffer + JSONL, and broadcast.
@@ -910,23 +1165,7 @@ async fn stream_logs<R: tokio::io::AsyncRead + Unpin>(
                 let _ = tx.send(true);
             }
         }
-        let entry = LogEntry {
-            ts: now(),
-            session_id: session_id.clone(),
-            stream: stream.clone(),
-            line,
-        };
-
-        {
-            let mut buffer = handle.log_buffer.lock().await;
-            if buffer.len() >= LOG_BUFFER_MAX {
-                buffer.pop_front();
-            }
-            buffer.push_back(entry.clone());
-        }
-
-        append_jsonl(&handle.log_path, &handle.log_write_lock, &entry).await;
-        let _ = handle.log_tx.send(entry);
+        emit_log(&handle, stream.clone(), &session_id, line).await;
     }
     tracing::debug!(
         engine_id = %handle.config.id,
@@ -935,7 +1174,8 @@ async fn stream_logs<R: tokio::io::AsyncRead + Unpin>(
     );
 }
 
-// Update in-memory status and persist snapshot to JSONL.
+// ── Status helpers ────────────────────────────────────────────────────────────
+
 async fn set_status(
     handle: &EngineTaskHandle,
     status: EngineStatus,
@@ -961,7 +1201,6 @@ async fn set_status(
     );
 }
 
-// Record a stop event with exit code.
 async fn set_exit_status(handle: &EngineTaskHandle, code: Option<i32>) {
     let mut instance = handle.instance.write().await;
     instance.status = EngineStatus::Stopped;
@@ -980,6 +1219,29 @@ async fn set_exit_status(handle: &EngineTaskHandle, code: Option<i32>) {
 
 fn should_restart(policy: &AutoRestart, retries: u32) -> bool {
     policy.enabled && retries < policy.max_retries
+}
+
+async fn terminate_process_tree(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child.id() {
+            let pgid = pid as i32;
+            unsafe {
+                libc::killpg(pgid, libc::SIGTERM);
+            }
+            let wait_result =
+                tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+            if wait_result.is_err() {
+                unsafe {
+                    libc::killpg(pgid, libc::SIGKILL);
+                }
+                let _ = child.wait().await;
+            }
+            return;
+        }
+    }
+    let _ = child.kill().await;
+    let _ = child.wait().await;
 }
 
 fn now() -> String {

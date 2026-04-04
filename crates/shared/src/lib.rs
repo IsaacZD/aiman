@@ -130,7 +130,11 @@ pub struct DockerImage {
     pub ports: Vec<String>,
     pub volumes: Vec<String>,
     pub env: Vec<EnvVar>,
+    /// Deprecated when bollard is used — GPU access is configured via `gpus` instead.
     pub run_args: Vec<String>,
+    /// GPU device access: "all", "0", "0,1", or "device=<id>".
+    /// Maps to bollard HostConfig.device_requests (NVIDIA driver).
+    pub gpus: Option<String>,
     pub workdir: Option<String>,
     pub user: Option<String>,
     pub command: Option<String>,
@@ -149,7 +153,10 @@ pub struct DockerConfig {
     pub extra_ports: Vec<String>,
     pub extra_volumes: Vec<String>,
     pub extra_env: Vec<EnvVar>,
+    /// Deprecated when bollard is used — use `gpus` on the image instead.
     pub extra_run_args: Vec<String>,
+    /// Override image-level GPU setting for this engine instance.
+    pub gpus: Option<String>,
     pub workdir: Option<String>,
     pub user: Option<String>,
     pub command: Option<String>,
@@ -167,6 +174,7 @@ impl Default for DockerConfig {
             extra_volumes: Vec::new(),
             extra_env: Vec::new(),
             extra_run_args: Vec::new(),
+            gpus: None,
             workdir: None,
             user: None,
             command: None,

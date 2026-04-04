@@ -13,6 +13,7 @@ use std::{
 };
 
 use aiman_shared::{DockerImage, EngineConfig, EngineInstance, EngineStatus, EngineType};
+use bollard::Docker;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 
@@ -29,6 +30,7 @@ pub struct Supervisor {
     images_path: PathBuf,
     benchmark_path: PathBuf,
     benchmark_write_lock: Arc<Mutex<()>>,
+    docker_client: Arc<Docker>,
 }
 
 impl Supervisor {
@@ -50,6 +52,8 @@ impl Supervisor {
             tokio::fs::create_dir_all(parent).await?;
         }
 
+        let docker_client = Arc::new(Docker::connect_with_local_defaults()?);
+
         let configs_vec = load_config_store(&config_path, seed_path.as_ref()).await?;
         tracing::info!(count = configs_vec.len(), "loaded engine configs");
         let images_path = data_dir.join("docker-images.json");
@@ -69,6 +73,7 @@ impl Supervisor {
                 Arc::new(EngineHandle::new(
                     config,
                     images.clone(),
+                    docker_client.clone(),
                     data_dir.join("logs").join(format!("{id}.jsonl")),
                     data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
                     data_dir.join("status").join(format!("{id}.jsonl")),
@@ -85,6 +90,7 @@ impl Supervisor {
             images_path,
             benchmark_path,
             benchmark_write_lock: Arc::new(Mutex::new(())),
+            docker_client,
         })
     }
 
@@ -211,6 +217,7 @@ impl Supervisor {
             Arc::new(EngineHandle::new(
                 config.clone(),
                 self.images.clone(),
+                self.docker_client.clone(),
                 self.data_dir.join("logs").join(format!("{id}.jsonl")),
                 self.data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
                 self.data_dir.join("status").join(format!("{id}.jsonl")),
@@ -252,6 +259,7 @@ impl Supervisor {
             Arc::new(EngineHandle::new(
                 config.clone(),
                 self.images.clone(),
+                self.docker_client.clone(),
                 self.data_dir.join("logs").join(format!("{id}.jsonl")),
                 self.data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
                 self.data_dir.join("status").join(format!("{id}.jsonl")),
