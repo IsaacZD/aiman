@@ -19,6 +19,7 @@ export type DockerImageForm = {
   volumes: string[];
   env: EnvVar[];
   run_args: string[];
+  gpus: string;
   user: string;
   command: string;
   args: string[];
@@ -34,6 +35,7 @@ export type DockerEngineForm = {
   extra_volumes: string[];
   extra_env: EnvVar[];
   extra_run_args: string[];
+  gpus: string;
   user: string;
   command: string;
   args: string[];
@@ -50,6 +52,7 @@ export function createDockerImageForm(): DockerImageForm {
     volumes: [],
     env: [],
     run_args: [],
+    gpus: "",
     user: "",
     command: "",
     args: [],
@@ -73,6 +76,7 @@ export function createDockerEngineForm(): DockerEngineForm {
     extra_volumes: [],
     extra_env: [],
     extra_run_args: [],
+    gpus: "",
     user: "",
     command: "",
     args: [],

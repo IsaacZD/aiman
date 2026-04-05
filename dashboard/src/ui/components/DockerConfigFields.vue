@@ -34,11 +34,18 @@
       <EnvVarListEditor v-model="form.extra_env" />
     </label>
     <label>
-      Extra run args
+      Override GPU access
+      <input v-model="form.gpus" type="text" placeholder="inherit from image template" />
+      <small style="display: block; margin-top: 4px; opacity: 0.7;">
+        "all", "0", "0,1", or device ID. Overrides image-level setting.
+      </small>
+    </label>
+    <label>
+      Extra run args (deprecated)
       <ArgumentListEditor
         v-model="form.extra_run_args"
         add-label="Add runtime arg"
-        placeholder="--gpus all"
+        placeholder="Legacy CLI args (not used with bollard)"
       />
     </label>
     <label>

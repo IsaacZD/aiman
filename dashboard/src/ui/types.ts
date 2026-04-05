@@ -40,6 +40,7 @@ export type EngineConfig = {
     extra_volumes?: string[];
     extra_env?: EnvVar[];
     extra_run_args?: string[];
+    gpus?: string | null;
     user?: string | null;
     command?: string | null;
     args?: string[];
@@ -56,6 +57,7 @@ export type DockerImage = {
   volumes: string[];
   env: EnvVar[];
   run_args: string[];
+  gpus?: string | null;
   user?: string | null;
   command?: string | null;
   args: string[];

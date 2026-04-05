@@ -12,7 +12,7 @@ use aiman_shared::{
 };
 use bollard::{
     container::LogOutput,
-    models::{ContainerCreateBody, DeviceRequest, HostConfig, PortBinding},
+    models::{ContainerCreateBody, DeviceMapping, HostConfig, PortBinding},
     query_parameters::{
         CreateContainerOptions, LogsOptions, RemoveContainerOptions,
         StartContainerOptions, StopContainerOptions, WaitContainerOptions,
@@ -197,7 +197,7 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
 
         if let Err(err) = result {
             set_status(&handle, EngineStatus::Error, None, None).await;
-            tracing::warn!(error = %err, engine_id = %handle.config.id, "engine error");
+            tracing::warn!(error = ?err, engine_id = %handle.config.id, "engine error");
         }
 
         if should_restart(&handle.config.auto_restart, retries) {
@@ -243,6 +243,9 @@ async fn run_docker_engine(
         .as_ref()
         .map(|d| docker_container_name(&handle.config, d))
         .unwrap_or_else(|| handle.config.id.clone());
+
+    // Remove any existing container with the same name to avoid 409 conflicts.
+    remove_docker_container(&handle.docker_client, &container_name).await;
 
     // Create container.
     let container_id =
@@ -500,19 +503,56 @@ async fn create_docker_container(
         .filter(|v| !v.is_empty())
         .collect();
 
-    // GPU device requests.
-    let device_requests = resolved.gpus.as_deref().map(|gpus| {
-        let count = if gpus == "all" {
-            -1
+    // GPU devices: map to /dev/nvidia* device paths.
+    let devices = resolved.gpus.as_deref().and_then(|gpus| {
+        if gpus.is_empty() {
+            return None;
+        }
+
+        let mut device_mappings = Vec::new();
+
+        // Always include control devices
+        device_mappings.push(DeviceMapping {
+            path_on_host: Some("/dev/nvidiactl".into()),
+            path_in_container: Some("/dev/nvidiactl".into()),
+            cgroup_permissions: Some("rwm".into()),
+        });
+        device_mappings.push(DeviceMapping {
+            path_on_host: Some("/dev/nvidia-uvm".into()),
+            path_in_container: Some("/dev/nvidia-uvm".into()),
+            cgroup_permissions: Some("rwm".into()),
+        });
+        device_mappings.push(DeviceMapping {
+            path_on_host: Some("/dev/nvidia-uvm-tools".into()),
+            path_in_container: Some("/dev/nvidia-uvm-tools".into()),
+            cgroup_permissions: Some("rwm".into()),
+        });
+
+        // Add GPU devices based on the gpus value
+        if gpus == "all" {
+            // Add devices 0-15 (should cover most systems)
+            for i in 0..16 {
+                device_mappings.push(DeviceMapping {
+                    path_on_host: Some(format!("/dev/nvidia{}", i)),
+                    path_in_container: Some(format!("/dev/nvidia{}", i)),
+                    cgroup_permissions: Some("rwm".into()),
+                });
+            }
         } else {
-            gpus.split(',').count() as i64
-        };
-        vec![DeviceRequest {
-            driver: Some("nvidia".into()),
-            count: Some(count),
-            capabilities: Some(vec![vec!["gpu".into()]]),
-            ..Default::default()
-        }]
+            // Parse specific GPU IDs (e.g., "0", "0,1", "1,3")
+            for gpu_id in gpus.split(',') {
+                let gpu_id = gpu_id.trim();
+                if let Ok(id) = gpu_id.parse::<u32>() {
+                    device_mappings.push(DeviceMapping {
+                        path_on_host: Some(format!("/dev/nvidia{}", id)),
+                        path_in_container: Some(format!("/dev/nvidia{}", id)),
+                        cgroup_permissions: Some("rwm".into()),
+                    });
+                }
+            }
+        }
+
+        Some(device_mappings)
     });
 
     let host_config = HostConfig {
@@ -522,7 +562,7 @@ async fn create_docker_container(
             Some(port_bindings)
         },
         binds: if binds.is_empty() { None } else { Some(binds) },
-        device_requests,
+        devices,
         ..Default::default()
     };
 

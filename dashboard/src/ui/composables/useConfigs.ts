@@ -179,6 +179,7 @@ export function useConfigs() {
           ? [...docker.extra_env, ...config.env]
           : [...config.env],
         extra_run_args: docker?.extra_run_args ? [...docker.extra_run_args] : [],
+        gpus: docker?.gpus ?? "",
         user: docker?.user ?? "",
         command: docker?.command ?? "",
         args: docker?.args ? [...docker.args] : [],
@@ -358,6 +359,7 @@ export function useConfigs() {
           extra_volumes: cleanStringList(dockerEngineForm.value.extra_volumes),
           extra_env: extraEnv,
           extra_run_args: cleanStringList(dockerEngineForm.value.extra_run_args),
+          gpus: dockerEngineForm.value.gpus.trim() || null,
           user: dockerEngineForm.value.user.trim() || null,
           command: dockerEngineForm.value.command.trim() || null,
           args: cleanStringList(dockerEngineForm.value.args),

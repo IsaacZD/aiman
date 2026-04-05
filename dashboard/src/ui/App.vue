@@ -525,6 +525,7 @@ async function refreshAll() {
       configHostId.value = hosts.value[0].id;
     }
     await loadConfigs(configHostId.value);
+    await loadImages(configHostId.value);
     if (mainTab.value === "benchmarks") {
       await loadBenchmarks();
     }
