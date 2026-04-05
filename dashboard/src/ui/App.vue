@@ -177,7 +177,7 @@
     v-model:fastllm-args-form="fastllmArgsForm"
     v-model:k-transformers-args-form="kTransformersArgsForm"
     v-model:custom-args-form="customArgsForm"
-    v-model:docker-engine-form="dockerEngineForm"
+    v-model:container-engine-form="containerEngineForm"
     @close="closeConfigModal"
     @submit="saveConfig(configHostId, images, onConfigSaved)"
     @delete="deleteConfigFromModal(configHostId, onConfigSaved)"
@@ -199,7 +199,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
-import type { Host, EngineConfig, DockerImage, EngineItem } from "./types";
+import type { Host, EngineConfig, ContainerImage, EngineItem } from "./types";
 
 import EnginesView from "./views/EnginesView.vue";
 import BenchmarksView from "./views/BenchmarksView.vue";
@@ -214,7 +214,7 @@ import { useEvents } from "./composables/useEvents";
 import { useHosts } from "./composables/useHosts";
 import { useLogs } from "./composables/useLogs";
 import { useConfigs } from "./composables/useConfigs";
-import { useDockerImages } from "./composables/useDockerImages";
+import { useContainerImages } from "./composables/useContainerImages";
 import { useBenchmarks } from "./composables/useBenchmarks";
 
 // ── composables ──────────────────────────────────────────────────────────────
@@ -287,7 +287,7 @@ const {
   fastllmArgsForm,
   kTransformersArgsForm,
   customArgsForm,
-  dockerEngineForm,
+  containerEngineForm,
   resetConfigForm,
   openConfigModal,
   openConfigTemplateModal,
@@ -313,7 +313,7 @@ const {
   saveImage,
   deleteImageFromModal,
   pruneImages
-} = useDockerImages();
+} = useContainerImages();
 
 const {
   benchmarkRecords,
@@ -428,7 +428,7 @@ function onConfigSaved(nextConfigs: EngineConfig[]) {
 
 // ── admin: image modal wrappers ───────────────────────────────────────────────
 
-function handleOpenImageModal(image?: DockerImage) {
+function handleOpenImageModal(image?: ContainerImage) {
   openImageModal(image, configHostId.value);
 }
 

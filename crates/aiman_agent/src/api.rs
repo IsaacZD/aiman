@@ -11,7 +11,7 @@ use std::convert::Infallible;
 use tokio::sync::broadcast;
 
 use aiman_shared::{
-    DockerImage, EngineConfig, EngineInstance, EngineStatus, EngineType, LogEntry, LogSession,
+    ContainerImage, EngineConfig, EngineInstance, EngineStatus, EngineType, LogEntry, LogSession,
 };
 
 use crate::benchmark::{run_benchmark, BenchmarkRecord, BenchmarkRequest};
@@ -282,10 +282,10 @@ pub async fn benchmark_engine(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let BenchmarkRequest { mut settings, host } = request;
-    if settings.api_base_url.is_none() && matches!(config.engine_type, EngineType::Docker) {
-        if let Some(docker) = config.docker.as_ref() {
-            if let Some(image) = state.supervisor.get_image(&docker.image_id).await {
-                if let Some(api_base_url) = infer_docker_api_base(&config, &image) {
+    if settings.api_base_url.is_none() && matches!(config.engine_type, EngineType::Container) {
+        if let Some(container) = config.container.as_ref() {
+            if let Some(image) = state.supervisor.get_image(&container.image_id).await {
+                if let Some(api_base_url) = infer_container_api_base(&config, &image) {
                     settings.api_base_url = Some(api_base_url);
                 }
             }
@@ -321,28 +321,28 @@ pub async fn list_benchmarks(
     Ok(Json(BenchmarksResponse { records: entries }))
 }
 
-fn infer_docker_api_base(config: &EngineConfig, image: &DockerImage) -> Option<String> {
-    let docker_args = config
-        .docker
+fn infer_container_api_base(config: &EngineConfig, image: &ContainerImage) -> Option<String> {
+    let container_args = config
+        .container
         .as_ref()
-        .map(|docker| docker.args.as_slice())
+        .map(|c| c.args.as_slice())
         .unwrap_or(&[]);
-    let mut host = parse_arg_value(docker_args, "--host")
-        .or_else(|| parse_arg_value(docker_args, "--bind"))
+    let mut host = parse_arg_value(container_args, "--host")
+        .or_else(|| parse_arg_value(container_args, "--bind"))
         .or_else(|| parse_arg_value(&config.args, "--host"))
         .or_else(|| parse_arg_value(&config.args, "--bind"))
         .unwrap_or_else(|| "127.0.0.1".to_string());
-    let ports = match &config.docker {
-        Some(docker) => {
+    let ports = match &config.container {
+        Some(container) => {
             let mut ports = image.ports.clone();
-            ports.extend(docker.extra_ports.clone());
+            ports.extend(container.extra_ports.clone());
             ports
         }
         None => image.ports.clone(),
     };
-    let port = parse_arg_value(docker_args, "--port")
+    let port = parse_arg_value(container_args, "--port")
         .and_then(|value| value.parse::<u16>().ok())
-        .or_else(|| parse_docker_host_port(&ports))
+        .or_else(|| parse_container_host_port(&ports))
         .unwrap_or(8000);
     if host == "0.0.0.0" || host == "::" {
         host = "127.0.0.1".to_string();
@@ -362,16 +362,16 @@ fn parse_arg_value(args: &[String], key: &str) -> Option<String> {
     None
 }
 
-fn parse_docker_host_port(ports: &[String]) -> Option<u16> {
+fn parse_container_host_port(ports: &[String]) -> Option<u16> {
     for mapping in ports {
-        if let Some(port) = parse_docker_port_mapping(mapping) {
+        if let Some(port) = parse_container_port_mapping(mapping) {
             return Some(port);
         }
     }
     None
 }
 
-fn parse_docker_port_mapping(mapping: &str) -> Option<u16> {
+fn parse_container_port_mapping(mapping: &str) -> Option<u16> {
     let trimmed = mapping.trim();
     if trimmed.is_empty() {
         return None;
@@ -428,7 +428,7 @@ pub async fn create_config(
 
 pub async fn create_image(
     State(state): State<AppState>,
-    Json(image): Json<DockerImage>,
+    Json(image): Json<ContainerImage>,
 ) -> Result<Json<ImageResponse>, StatusCode> {
     tracing::info!(image_id = %image.id, "create image API called");
     let image = state
@@ -456,7 +456,7 @@ pub async fn update_config(
 pub async fn update_image(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(image): Json<DockerImage>,
+    Json(image): Json<ContainerImage>,
 ) -> Result<Json<ImageResponse>, StatusCode> {
     tracing::info!(image_id = %id, "update image API called");
     let image = state
@@ -545,12 +545,12 @@ pub(crate) struct ConfigResponse {
 
 #[derive(Serialize)]
 pub(crate) struct ImagesResponse {
-    images: Vec<DockerImage>,
+    images: Vec<ContainerImage>,
 }
 
 #[derive(Serialize)]
 pub(crate) struct ImageResponse {
-    image: DockerImage,
+    image: ContainerImage,
 }
 
 #[derive(Serialize)]

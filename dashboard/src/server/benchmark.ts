@@ -4,7 +4,7 @@ import path from "node:path";
 import type {
   BenchmarkRecord,
   BenchmarkSettings,
-  DockerImage,
+  ContainerImage,
   EngineConfig,
   EngineInstance,
   HardwareInfo,
@@ -63,8 +63,8 @@ export async function runDashboardBenchmark(
   ]);
 
   const image =
-    config.engine_type === "Docker" && config.docker?.image_id
-      ? await fetchImage(host, config.docker.image_id)
+    config.engine_type === "Container" && config.container?.image_id
+      ? await fetchImage(host, config.container.image_id)
       : null;
 
   if (instance.status !== "Running") {
@@ -201,14 +201,14 @@ async function fetchConfig(host: HostConfig, engineId: string): Promise<EngineCo
   return config;
 }
 
-async function fetchImage(host: HostConfig, imageId: string): Promise<DockerImage | null> {
+async function fetchImage(host: HostConfig, imageId: string): Promise<ContainerImage | null> {
   const res = await fetch(`${host.base_url}/v1/images/${encodeURIComponent(imageId)}`, {
     headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
   });
   if (!res.ok) {
     return null;
   }
-  const body = (await res.json()) as { image?: DockerImage };
+  const body = (await res.json()) as { image?: ContainerImage };
   return body.image ?? null;
 }
 
@@ -264,19 +264,19 @@ function normalizeBaseUrl(value: string) {
   return value.trim().replace(/\/$/, "");
 }
 
-function inferApiBase(config: EngineConfig, host: HostConfig, image?: DockerImage) {
-  const dockerArgs = config.docker?.args ?? [];
-  const dockerPorts = [...(image?.ports ?? []), ...(config.docker?.extra_ports ?? [])];
+function inferApiBase(config: EngineConfig, host: HostConfig, image?: ContainerImage) {
+  const containerArgs = config.container?.args ?? [];
+  const containerPorts = [...(image?.ports ?? []), ...(config.container?.extra_ports ?? [])];
   const hostValue =
-    parseArgValue(dockerArgs, "--host") ??
-    parseArgValue(dockerArgs, "--bind") ??
+    parseArgValue(containerArgs, "--host") ??
+    parseArgValue(containerArgs, "--bind") ??
     parseArgValue(config.args, "--host") ??
     parseArgValue(config.args, "--bind") ??
     "127.0.0.1";
   const portValue =
-    parseArgValue(dockerArgs, "--port") ??
+    parseArgValue(containerArgs, "--port") ??
     parseArgValue(config.args, "--port") ??
-    parseDockerHostPort(dockerPorts);
+    parseContainerHostPort(containerPorts);
   const port = portValue ? Number(portValue) : defaultPort(config.engine_type);
   if (!Number.isFinite(port)) {
     return null;
@@ -300,15 +300,15 @@ function parseArgValue(args: string[], key: string) {
   return null;
 }
 
-function parseDockerHostPort(ports: string[]) {
+function parseContainerHostPort(ports: string[]) {
   for (const mapping of ports) {
-    const port = parseDockerPortMapping(mapping);
+    const port = parseContainerPortMapping(mapping);
     if (port) return String(port);
   }
   return null;
 }
 
-function parseDockerPortMapping(mapping: string) {
+function parseContainerPortMapping(mapping: string) {
   const trimmed = mapping.trim();
   if (!trimmed) return null;
   const noProto = trimmed.split("/")[0] ?? trimmed;

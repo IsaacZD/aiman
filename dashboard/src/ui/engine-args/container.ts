@@ -3,7 +3,7 @@ export type EnvVar = {
   value: string;
 };
 
-export type DockerImageBuildForm = {
+export type ContainerImageBuildForm = {
   enabled: boolean;
   dockerfile_content: string;
   pull: boolean;
@@ -11,7 +11,7 @@ export type DockerImageBuildForm = {
   build_args: EnvVar[];
 };
 
-export type DockerImageForm = {
+export type ContainerImageForm = {
   id: string;
   name: string;
   image: string;
@@ -25,10 +25,10 @@ export type DockerImageForm = {
   args: string[];
   pull: boolean;
   remove: boolean;
-  build: DockerImageBuildForm;
+  build: ContainerImageBuildForm;
 };
 
-export type DockerEngineForm = {
+export type ContainerEngineForm = {
   image_id: string;
   container_name: string;
   extra_ports: string[];
@@ -43,7 +43,7 @@ export type DockerEngineForm = {
   remove_mode: "inherit" | "true" | "false";
 };
 
-export function createDockerImageForm(): DockerImageForm {
+export function createContainerImageForm(): ContainerImageForm {
   return {
     id: "",
     name: "",
@@ -68,7 +68,7 @@ export function createDockerImageForm(): DockerImageForm {
   };
 }
 
-export function createDockerEngineForm(): DockerEngineForm {
+export function createContainerEngineForm(): ContainerEngineForm {
   return {
     image_id: "",
     container_name: "",

@@ -12,11 +12,7 @@ use std::{
     sync::Arc,
 };
 
-use aiman_shared::{DockerImage, EngineConfig, EngineInstance, EngineStatus, EngineType};
-use bollard::{
-    query_parameters::{ListImagesOptions, RemoveImageOptions},
-    Docker,
-};
+use aiman_shared::{ContainerImage, EngineConfig, EngineInstance, EngineStatus, EngineType};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex, RwLock};
 
@@ -31,11 +27,10 @@ pub struct Supervisor {
     data_dir: PathBuf,
     configs: Arc<RwLock<HashMap<String, EngineConfig>>>,
     handles: Arc<RwLock<HashMap<String, Arc<EngineHandle>>>>,
-    images: Arc<RwLock<HashMap<String, DockerImage>>>,
+    images: Arc<RwLock<HashMap<String, ContainerImage>>>,
     images_path: PathBuf,
     benchmark_path: PathBuf,
     benchmark_write_lock: Arc<Mutex<()>>,
-    docker_client: Arc<Docker>,
     // Broadcast channels for reactive push to SSE clients.
     status_tx: broadcast::Sender<EngineInstance>,
     hardware_tx: broadcast::Sender<HardwareInfo>,
@@ -60,13 +55,11 @@ impl Supervisor {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let docker_client = Arc::new(Docker::connect_with_local_defaults()?);
-
         let configs_vec = load_config_store(&config_path, seed_path.as_ref()).await?;
         tracing::info!(count = configs_vec.len(), "loaded engine configs");
-        let images_path = data_dir.join("docker-images.json");
+        let images_path = data_dir.join("container-images.json");
         let images_vec = load_image_store(&images_path).await?;
-        tracing::info!(count = images_vec.len(), "loaded docker images");
+        tracing::info!(count = images_vec.len(), "loaded container images");
         let mut configs = HashMap::new();
         let mut handles = HashMap::new();
         let images = Arc::new(RwLock::new(images_to_map(&images_vec)));
@@ -86,7 +79,6 @@ impl Supervisor {
                 Arc::new(EngineHandle::new(
                     config,
                     images.clone(),
-                    docker_client.clone(),
                     data_dir.join("logs").join(format!("{id}.jsonl")),
                     data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
                     data_dir.join("status").join(format!("{id}.jsonl")),
@@ -104,7 +96,6 @@ impl Supervisor {
             images_path,
             benchmark_path,
             benchmark_write_lock: Arc::new(Mutex::new(())),
-            docker_client,
             status_tx,
             hardware_tx,
         })
@@ -143,22 +134,22 @@ impl Supervisor {
         configs.get(id).cloned()
     }
 
-    pub async fn list_images(&self) -> Vec<DockerImage> {
+    pub async fn list_images(&self) -> Vec<ContainerImage> {
         let images = self.images.read().await;
         let mut values: Vec<_> = images.values().cloned().collect();
         values.sort_by(|a, b| a.id.cmp(&b.id));
         values
     }
 
-    pub async fn get_image(&self, id: &str) -> Option<DockerImage> {
+    pub async fn get_image(&self, id: &str) -> Option<ContainerImage> {
         let images = self.images.read().await;
         images.get(id).cloned()
     }
 
     pub async fn add_image(
         &self,
-        image: DockerImage,
-    ) -> Result<DockerImage, SupervisorError> {
+        image: ContainerImage,
+    ) -> Result<ContainerImage, SupervisorError> {
         validate_image(&image)?;
         let mut images = self.images.write().await;
         if images.contains_key(&image.id) {
@@ -167,15 +158,15 @@ impl Supervisor {
         let id = image.id.clone();
         images.insert(id.clone(), image.clone());
         persist_image_store(&self.images_path, &images).await;
-        tracing::info!(image_id = %id, "added docker image");
+        tracing::info!(image_id = %id, "added container image");
         Ok(image)
     }
 
     pub async fn update_image(
         &self,
         id: &str,
-        image: DockerImage,
-    ) -> Result<DockerImage, SupervisorError> {
+        image: ContainerImage,
+    ) -> Result<ContainerImage, SupervisorError> {
         validate_image(&image)?;
         if id != image.id {
             return Err(SupervisorError::ImageInvalid(
@@ -188,18 +179,18 @@ impl Supervisor {
         }
         images.insert(id.to_string(), image.clone());
         persist_image_store(&self.images_path, &images).await;
-        tracing::info!(image_id = %id, "updated docker image");
+        tracing::info!(image_id = %id, "updated container image");
         Ok(image)
     }
 
     pub async fn remove_image(&self, id: &str) -> Result<(), SupervisorError> {
         let configs = self.configs.read().await;
         if configs.values().any(|config| {
-            config.engine_type == EngineType::Docker
+            config.engine_type == EngineType::Container
                 && config
-                    .docker
+                    .container
                     .as_ref()
-                    .map(|docker| docker.image_id == id)
+                    .map(|c| c.image_id == id)
                     .unwrap_or(false)
         }) {
             return Err(SupervisorError::ImageInUse);
@@ -210,15 +201,15 @@ impl Supervisor {
             return Err(SupervisorError::ImageNotFound);
         }
         persist_image_store(&self.images_path, &images).await;
-        tracing::info!(image_id = %id, "removed docker image");
+        tracing::info!(image_id = %id, "removed container image");
         Ok(())
     }
 
     pub async fn add_config(&self, config: EngineConfig) -> Result<EngineConfig, SupervisorError> {
         validate_config(&config)?;
-        if matches!(config.engine_type, EngineType::Docker) {
+        if matches!(config.engine_type, EngineType::Container) {
             let images = self.images.read().await;
-            validate_docker_config(&config, &images)?;
+            validate_container_config(&config, &images)?;
         }
         let mut configs = self.configs.write().await;
         if configs.contains_key(&config.id) {
@@ -233,7 +224,6 @@ impl Supervisor {
             Arc::new(EngineHandle::new(
                 config.clone(),
                 self.images.clone(),
-                self.docker_client.clone(),
                 self.data_dir.join("logs").join(format!("{id}.jsonl")),
                 self.data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
                 self.data_dir.join("status").join(format!("{id}.jsonl")),
@@ -252,9 +242,9 @@ impl Supervisor {
         config: EngineConfig,
     ) -> Result<EngineConfig, SupervisorError> {
         validate_config(&config)?;
-        if matches!(config.engine_type, EngineType::Docker) {
+        if matches!(config.engine_type, EngineType::Container) {
             let images = self.images.read().await;
-            validate_docker_config(&config, &images)?;
+            validate_container_config(&config, &images)?;
         }
         if id != config.id {
             return Err(SupervisorError::ConfigInvalid(
@@ -276,7 +266,6 @@ impl Supervisor {
             Arc::new(EngineHandle::new(
                 config.clone(),
                 self.images.clone(),
-                self.docker_client.clone(),
                 self.data_dir.join("logs").join(format!("{id}.jsonl")),
                 self.data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
                 self.data_dir.join("status").join(format!("{id}.jsonl")),
@@ -319,40 +308,57 @@ impl Supervisor {
         Ok(instance)
     }
 
-    /// Remove any Docker image labeled `managed-by=aiman` whose tag is no longer
+    /// Remove any container image labeled `managed-by=aiman` whose tag is no longer
     /// referenced by any current aiman image config.  Returns the list of removed tags.
     pub async fn prune_images(&self) -> Result<Vec<String>, SupervisorError> {
+        use tokio::process::Command;
+
         // Collect all tags currently referenced by aiman image configs.
         let images = self.images.read().await;
         let live_tags: HashSet<String> = images.values().map(|img| img.image.clone()).collect();
         drop(images);
 
-        // Ask Docker for every image we previously labeled.
-        let mut filters = HashMap::new();
-        filters.insert("label".to_string(), vec!["managed-by=aiman".to_string()]);
-        let daemon_images = self
-            .docker_client
-            .list_images(Some(ListImagesOptions { filters: Some(filters), ..Default::default() }))
+        // Ask Podman for every image we previously labeled.
+        let output = Command::new("podman")
+            .args(["images", "--filter", "label=managed-by=aiman", "--format", "json"])
+            .output()
             .await
-            .map_err(|e| SupervisorError::DockerApi(e.to_string()))?;
+            .map_err(|e| SupervisorError::ContainerApi(e.to_string()))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(SupervisorError::ContainerApi(format!("podman images failed: {}", stderr.trim())));
+        }
+
+        let daemon_images: Vec<serde_json::Value> =
+            serde_json::from_slice(&output.stdout).unwrap_or_default();
 
         let mut removed = Vec::new();
         for img in daemon_images {
-            for tag in &img.repo_tags {
+            let tags = img.get("Names")
+                .or_else(|| img.get("names"))
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            for tag_val in &tags {
+                let Some(tag) = tag_val.as_str() else { continue };
                 if !live_tags.contains(tag) {
-                    let result = self
-                        .docker_client
-                        .remove_image(
-                            tag,
-                            Some(RemoveImageOptions { force: false, noprune: false, platforms: None }),
-                            None,
-                        )
+                    let result = Command::new("podman")
+                        .args(["rmi", tag])
+                        .output()
                         .await;
-                    if result.is_ok() {
-                        tracing::info!(tag = %tag, "pruned orphaned aiman-managed image");
-                        removed.push(tag.clone());
-                    } else if let Err(err) = result {
-                        tracing::warn!(tag = %tag, error = %err, "failed to prune image");
+                    match result {
+                        Ok(out) if out.status.success() => {
+                            tracing::info!(tag = %tag, "pruned orphaned aiman-managed image");
+                            removed.push(tag.to_string());
+                        }
+                        Ok(out) => {
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            tracing::warn!(tag = %tag, error = %stderr.trim(), "failed to prune image");
+                        }
+                        Err(err) => {
+                            tracing::warn!(tag = %tag, error = %err, "failed to prune image");
+                        }
                     }
                 }
             }
@@ -411,12 +417,12 @@ async fn load_config_store(
     Ok(Vec::new())
 }
 
-async fn load_image_store(path: &PathBuf) -> anyhow::Result<Vec<DockerImage>> {
+async fn load_image_store(path: &PathBuf) -> anyhow::Result<Vec<ContainerImage>> {
     if let Ok(raw) = tokio::fs::read_to_string(path).await {
         if raw.trim().is_empty() {
             return Ok(Vec::new());
         }
-        let images: Vec<DockerImage> = serde_json::from_str(&raw)?;
+        let images: Vec<ContainerImage> = serde_json::from_str(&raw)?;
         return Ok(images);
     }
     Ok(Vec::new())
@@ -430,7 +436,7 @@ fn configs_to_map(configs: &[EngineConfig]) -> HashMap<String, EngineConfig> {
         .collect()
 }
 
-fn images_to_map(images: &[DockerImage]) -> HashMap<String, DockerImage> {
+fn images_to_map(images: &[ContainerImage]) -> HashMap<String, ContainerImage> {
     images
         .iter()
         .cloned()
@@ -446,7 +452,7 @@ async fn persist_config_store(path: &PathBuf, configs: &HashMap<String, EngineCo
     }
 }
 
-async fn persist_image_store(path: &PathBuf, images: &HashMap<String, DockerImage>) {
+async fn persist_image_store(path: &PathBuf, images: &HashMap<String, ContainerImage>) {
     let mut values: Vec<_> = images.values().cloned().collect();
     values.sort_by(|a, b| a.id.cmp(&b.id));
     if let Ok(serialized) = serde_json::to_string_pretty(&values) {
@@ -461,14 +467,14 @@ fn validate_config(config: &EngineConfig) -> Result<(), SupervisorError> {
     if config.name.trim().is_empty() {
         return Err(SupervisorError::ConfigInvalid("name is required".to_string()));
     }
-    if matches!(config.engine_type, EngineType::Docker) {
-        let docker = config
-            .docker
+    if matches!(config.engine_type, EngineType::Container) {
+        let container = config
+            .container
             .as_ref()
-            .ok_or_else(|| SupervisorError::ConfigInvalid("docker config is required".to_string()))?;
-        if docker.image_id.trim().is_empty() {
+            .ok_or_else(|| SupervisorError::ConfigInvalid("container config is required".to_string()))?;
+        if container.image_id.trim().is_empty() {
             return Err(SupervisorError::ConfigInvalid(
-                "docker image id is required".to_string(),
+                "container image id is required".to_string(),
             ));
         }
     } else if config.command.trim().is_empty() {
@@ -479,21 +485,21 @@ fn validate_config(config: &EngineConfig) -> Result<(), SupervisorError> {
     Ok(())
 }
 
-fn validate_docker_config(
+fn validate_container_config(
     config: &EngineConfig,
-    images: &HashMap<String, DockerImage>,
+    images: &HashMap<String, ContainerImage>,
 ) -> Result<(), SupervisorError> {
-    let docker = config
-        .docker
+    let container = config
+        .container
         .as_ref()
-        .ok_or_else(|| SupervisorError::ConfigInvalid("docker config is required".to_string()))?;
-    if !images.contains_key(&docker.image_id) {
+        .ok_or_else(|| SupervisorError::ConfigInvalid("container config is required".to_string()))?;
+    if !images.contains_key(&container.image_id) {
         return Err(SupervisorError::ImageNotFound);
     }
     Ok(())
 }
 
-fn validate_image(image: &DockerImage) -> Result<(), SupervisorError> {
+fn validate_image(image: &ContainerImage) -> Result<(), SupervisorError> {
     if image.id.trim().is_empty() {
         return Err(SupervisorError::ImageInvalid("id is required".to_string()));
     }

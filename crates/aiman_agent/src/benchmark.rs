@@ -463,24 +463,24 @@ fn normalize_base_url(value: &str) -> Option<String> {
 }
 
 fn infer_api_base(config: &EngineConfig) -> Option<String> {
-    let (mut host, port) = if matches!(config.engine_type, EngineType::Docker) {
-        let docker_args = config
-            .docker
+    let (mut host, port) = if matches!(config.engine_type, EngineType::Container) {
+        let container_args = config
+            .container
             .as_ref()
-            .map(|docker| docker.args.as_slice())
+            .map(|c| c.args.as_slice())
             .unwrap_or(&[]);
-        let host = parse_arg_value(docker_args, "--host")
-            .or_else(|| parse_arg_value(docker_args, "--bind"))
+        let host = parse_arg_value(container_args, "--host")
+            .or_else(|| parse_arg_value(container_args, "--bind"))
             .or_else(|| parse_arg_value(&config.args, "--host"))
             .or_else(|| parse_arg_value(&config.args, "--bind"))
             .unwrap_or_else(|| "127.0.0.1".to_string());
-        let port = parse_arg_value(docker_args, "--port")
+        let port = parse_arg_value(container_args, "--port")
             .and_then(|value| value.parse::<u16>().ok())
             .or_else(|| {
                 config
-                    .docker
+                    .container
                     .as_ref()
-                    .and_then(|docker| parse_docker_host_port(&docker.extra_ports))
+                    .and_then(|c| parse_container_host_port(&c.extra_ports))
             })
             .unwrap_or_else(|| default_port(&config.engine_type));
         (host, port)
@@ -522,16 +522,16 @@ fn default_port(engine_type: &EngineType) -> u16 {
     }
 }
 
-fn parse_docker_host_port(ports: &[String]) -> Option<u16> {
+fn parse_container_host_port(ports: &[String]) -> Option<u16> {
     for mapping in ports {
-        if let Some(port) = parse_docker_port_mapping(mapping) {
+        if let Some(port) = parse_container_port_mapping(mapping) {
             return Some(port);
         }
     }
     None
 }
 
-fn parse_docker_port_mapping(mapping: &str) -> Option<u16> {
+fn parse_container_port_mapping(mapping: &str) -> Option<u16> {
     let trimmed = mapping.trim();
     if trimmed.is_empty() {
         return None;

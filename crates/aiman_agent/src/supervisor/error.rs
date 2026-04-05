@@ -12,16 +12,16 @@ pub enum SupervisorError {
     ConfigInUse,
     #[error("engine config invalid: {0}")]
     ConfigInvalid(String),
-    #[error("docker image already exists")]
+    #[error("container image already exists")]
     ImageExists,
-    #[error("docker image in use")]
+    #[error("container image in use")]
     ImageInUse,
-    #[error("docker image not found")]
+    #[error("container image not found")]
     ImageNotFound,
-    #[error("docker image invalid: {0}")]
+    #[error("container image invalid: {0}")]
     ImageInvalid(String),
-    #[error("docker api error: {0}")]
-    DockerApi(String),
+    #[error("podman error: {0}")]
+    ContainerApi(String),
 }
 
 pub fn map_supervisor_error(err: SupervisorError) -> axum::http::StatusCode {
@@ -36,6 +36,6 @@ pub fn map_supervisor_error(err: SupervisorError) -> axum::http::StatusCode {
         SupervisorError::ImageInUse => axum::http::StatusCode::CONFLICT,
         SupervisorError::ImageNotFound => axum::http::StatusCode::NOT_FOUND,
         SupervisorError::ImageInvalid(_) => axum::http::StatusCode::BAD_REQUEST,
-        SupervisorError::DockerApi(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        SupervisorError::ContainerApi(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

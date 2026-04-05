@@ -18,7 +18,7 @@ pub struct EngineConfig {
     pub working_dir: Option<String>,
     pub auto_restart: AutoRestart,
     #[serde(default)]
-    pub docker: Option<DockerConfig>,
+    pub container: Option<ContainerConfig>,
 }
 
 /// Environment variable injection for a process.
@@ -40,7 +40,7 @@ pub enum EngineType {
     Fastllm,
     KTransformers,
     Custom,
-    Docker,
+    Container,
 }
 
 /// Runtime status of an engine instance.
@@ -107,51 +107,51 @@ impl Default for AutoRestart {
     }
 }
 
-/// Docker build settings for containerized engines.
+/// Container build settings for containerized engines.
 /// The agent creates a temporary directory, writes `dockerfile_content` as
 /// `Dockerfile` there, and uses that directory as the build context.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct DockerBuild {
+pub struct ContainerBuild {
     pub dockerfile_content: Option<String>,
     pub build_args: Vec<EnvVar>,
     pub pull: bool,
     pub no_cache: bool,
 }
 
-/// Stored image template shared across Docker-backed engine configs.
+/// Stored image template shared across container-backed engine configs.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct DockerImage {
+pub struct ContainerImage {
     pub id: String,
     pub name: String,
     pub image: String,
     pub ports: Vec<String>,
     pub volumes: Vec<String>,
     pub env: Vec<EnvVar>,
-    /// Deprecated when bollard is used — GPU access is configured via `gpus` instead.
+    /// Deprecated — GPU access is configured via `gpus` instead.
     pub run_args: Vec<String>,
-    /// GPU device access: "all", "0", "0,1", or "device=<id>".
-    /// Maps to bollard HostConfig.device_requests (NVIDIA driver).
+    /// GPU device access via CDI: "all", "0", "0,1".
+    /// Maps to podman `--device nvidia.com/gpu=<value>`.
     pub gpus: Option<String>,
     pub user: Option<String>,
     pub command: Option<String>,
     pub args: Vec<String>,
     pub pull: bool,
     pub remove: bool,
-    pub build: Option<DockerBuild>,
+    pub build: Option<ContainerBuild>,
 }
 
-/// Docker runtime settings for containerized engines.
+/// Container runtime settings for containerized engines.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct DockerConfig {
+pub struct ContainerConfig {
     pub container_name: Option<String>,
     pub image_id: String,
     pub extra_ports: Vec<String>,
     pub extra_volumes: Vec<String>,
     pub extra_env: Vec<EnvVar>,
-    /// Deprecated when bollard is used — use `gpus` on the image instead.
+    /// Deprecated — use `gpus` on the image instead.
     pub extra_run_args: Vec<String>,
     /// Override image-level GPU setting for this engine instance.
     pub gpus: Option<String>,
@@ -162,7 +162,7 @@ pub struct DockerConfig {
     pub remove: Option<bool>,
 }
 
-impl Default for DockerConfig {
+impl Default for ContainerConfig {
     fn default() -> Self {
         Self {
             container_name: None,

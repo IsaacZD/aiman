@@ -25,11 +25,10 @@ auto_restart = { enabled = false, max_retries = 0, backoff_secs = 5 }
 env = []
 
 [[engine]]
-id = "vllm-docker"
-name = "vLLM via Docker"
-engine_type = "Docker"
-# On NixOS, consider `command = "podman"` and add podman to the agent service PATH.
-command = "docker"
+id = "vllm-container"
+name = "vLLM via Podman"
+engine_type = "Container"
+command = "podman"
 args = []
 working_dir = "/var/lib/aiman"
 
@@ -39,8 +38,8 @@ env = [
   { key = "HF_HOME", value = "/data/hf" }
 ]
 
-[engine.docker]
+[engine.container]
 image_id = "vllm-openai"
 extra_ports = ["8000:8000"]
 extra_volumes = ["/models:/models:ro"]
-extra_run_args = ["--gpus all"]
+extra_run_args = []

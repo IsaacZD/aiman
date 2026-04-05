@@ -45,7 +45,7 @@
       <ArgumentListEditor
         v-model="form.extra_run_args"
         add-label="Add runtime arg"
-        placeholder="Legacy CLI args (not used with bollard)"
+        placeholder="Legacy CLI args (deprecated)"
       />
     </label>
     <label>
@@ -89,7 +89,7 @@
 import { defineModel } from "vue";
 import ArgumentListEditor from "./ArgumentListEditor.vue";
 import EnvVarListEditor from "./EnvVarListEditor.vue";
-import type { DockerEngineForm } from "../engine-args/docker";
+import type { ContainerEngineForm } from "../engine-args/container";
 
 type ImageOption = {
   id: string;
@@ -101,5 +101,5 @@ defineProps<{
   images: ImageOption[];
 }>();
 
-const form = defineModel<DockerEngineForm>({ required: true });
+const form = defineModel<ContainerEngineForm>({ required: true });
 </script>

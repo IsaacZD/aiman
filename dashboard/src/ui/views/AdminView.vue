@@ -80,12 +80,12 @@
 
 <script setup lang="ts">
 import { ref, watch } from "vue";
-import type { Host, EngineConfig, DockerImage } from "../types";
+import type { Host, EngineConfig, ContainerImage } from "../types";
 
 const props = defineProps<{
   selectedHost: Host | null;
   configs: EngineConfig[];
-  images: DockerImage[];
+  images: ContainerImage[];
   hostErrors: string[];
   configErrors: string[];
   imageErrors: string[];
@@ -94,7 +94,7 @@ const props = defineProps<{
 defineEmits<{
   (e: "open-config-modal", config?: EngineConfig): void;
   (e: "open-config-template-modal", config: EngineConfig): void;
-  (e: "open-image-modal", image?: DockerImage): void;
+  (e: "open-image-modal", image?: ContainerImage): void;
   (e: "prune-images"): void;
 }>();
 

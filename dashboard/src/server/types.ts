@@ -22,7 +22,7 @@ export type EngineConfig = {
     | "fastllm"
     | "KTransformers"
     | "Custom"
-    | "Docker";
+    | "Container";
   command: string;
   args: string[];
   env: { key: string; value: string }[];
@@ -32,7 +32,7 @@ export type EngineConfig = {
     max_retries: number;
     backoff_secs: number;
   };
-  docker?: {
+  container?: {
     container_name?: string | null;
     image_id: string;
     extra_ports?: string[];
@@ -48,7 +48,7 @@ export type EngineConfig = {
   } | null;
 };
 
-export type DockerImage = {
+export type ContainerImage = {
   id: string;
   name: string;
   image: string;

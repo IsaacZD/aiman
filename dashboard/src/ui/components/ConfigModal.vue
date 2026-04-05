@@ -28,16 +28,16 @@
             <option value="ik_llamacpp">ik_llamacpp</option>
             <option value="fastllm">fastllm</option>
             <option value="KTransformers">KTransformers</option>
-            <option value="Docker">Docker</option>
+            <option value="Container">Container</option>
             <option value="Custom">Custom</option>
           </select>
         </label>
         <label>
-          {{ form.engine_type === "Docker" ? "Container runtime" : "Command" }}
+          {{ form.engine_type === "Container" ? "Container runtime" : "Command" }}
           <input
             v-model="form.command"
             type="text"
-            :placeholder="form.engine_type === 'Docker' ? 'docker' : '/opt/vllm/serve'"
+            :placeholder="form.engine_type === 'Container' ? 'podman' : '/opt/vllm/serve'"
           />
         </label>
         <div class="engine-fields-panel">
@@ -75,14 +75,14 @@
               (onSelect) => $emit('open-model-picker', ggufModelOptions, 'Select GGUF model', onSelect)
             "
           />
-          <DockerConfigFields
-            v-else-if="form.engine_type === 'Docker'"
-            v-model="dockerEngineForm"
+          <ContainerConfigFields
+            v-else-if="form.engine_type === 'Container'"
+            v-model="containerEngineForm"
             :images="images"
           />
           <CustomConfigFields v-else v-model="customArgsForm" />
         </div>
-        <label v-if="form.engine_type !== 'Docker'">
+        <label v-if="form.engine_type !== 'Container'">
           Environment variables
           <EnvVarListEditor v-model="form.envEntries" />
         </label>
@@ -170,13 +170,13 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import type { EngineConfig, DockerImage, ModelArtifact, EnvVar } from "../types";
+import type { EngineConfig, ContainerImage, ModelArtifact, EnvVar } from "../types";
 import VllmConfigFields from "./VllmConfigFields.vue";
 import LlamaCppConfigFields from "./LlamaCppConfigFields.vue";
 import FastllmConfigFields from "./FastllmConfigFields.vue";
 import KTransformersConfigFields from "./KTransformersConfigFields.vue";
 import CustomConfigFields from "./CustomConfigFields.vue";
-import DockerConfigFields from "./DockerConfigFields.vue";
+import ContainerConfigFields from "./ContainerConfigFields.vue";
 import EnvVarListEditor from "./EnvVarListEditor.vue";
 
 const props = defineProps<{
@@ -194,7 +194,7 @@ const props = defineProps<{
     auto_restart_backoff_secs: number;
   };
   errors: string[];
-  images: DockerImage[];
+  images: ContainerImage[];
   modelArtifacts: ModelArtifact[];
   showModelPicker: boolean;
   modelPickerOptions: ModelArtifact[];
@@ -217,7 +217,7 @@ const llamaCppArgsForm = defineModel<any>("llamaCppArgsForm", { required: true }
 const fastllmArgsForm = defineModel<any>("fastllmArgsForm", { required: true });
 const kTransformersArgsForm = defineModel<any>("kTransformersArgsForm", { required: true });
 const customArgsForm = defineModel<any>("customArgsForm", { required: true });
-const dockerEngineForm = defineModel<any>("dockerEngineForm", { required: true });
+const containerEngineForm = defineModel<any>("containerEngineForm", { required: true });
 
 const vllmModelOptions = computed(() =>
   props.modelArtifacts.filter((artifact) => artifact.kind === "snapshot")

@@ -1,6 +1,6 @@
 import { ref } from "vue";
-import type { DockerImage, EnvVar } from "../types";
-import { createDockerImageForm } from "../engine-args/docker";
+import type { ContainerImage, EnvVar } from "../types";
+import { createContainerImageForm } from "../engine-args/container";
 import { buildEnvEntries, cleanStringList } from "./useConfigs";
 
 function generateImageId(): string {
@@ -10,24 +10,24 @@ function generateImageId(): string {
   return `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function useDockerImages() {
-  const images = ref<DockerImage[]>([]);
+export function useContainerImages() {
+  const images = ref<ContainerImage[]>([]);
   const imageErrors = ref<string[]>([]);
   const imageMode = ref<"create" | "edit">("create");
-  const imageForm = ref(createDockerImageForm());
+  const imageForm = ref(createContainerImageForm());
   const imageOriginalId = ref<string | null>(null);
   const showImageModal = ref(false);
 
   function resetImageForm() {
     imageMode.value = "create";
     imageForm.value = {
-      ...createDockerImageForm(),
+      ...createContainerImageForm(),
       id: generateImageId()
     };
     imageOriginalId.value = null;
   }
 
-  function openImageModal(image?: DockerImage, configHostId?: string | null) {
+  function openImageModal(image?: ContainerImage, configHostId?: string | null) {
     if (!configHostId) {
       imageErrors.value = ["Select a host before creating an image."];
       return;
@@ -45,7 +45,7 @@ export function useDockerImages() {
     imageErrors.value = [];
   }
 
-  function editImage(image: DockerImage) {
+  function editImage(image: ContainerImage) {
     imageMode.value = "edit";
     imageOriginalId.value = image.id;
     imageForm.value = {
@@ -72,7 +72,7 @@ export function useDockerImages() {
     };
   }
 
-  async function loadImages(configHostId: string | null): Promise<DockerImage[]> {
+  async function loadImages(configHostId: string | null): Promise<ContainerImage[]> {
     imageErrors.value = [];
     if (!configHostId) {
       images.value = [];
@@ -86,7 +86,7 @@ export function useDockerImages() {
         images.value = [];
         return [];
       }
-      const body = (await res.json()) as { images: DockerImage[] };
+      const body = (await res.json()) as { images: ContainerImage[] };
       const next = body.images ?? [];
       next.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
       images.value = next;
@@ -137,7 +137,7 @@ export function useDockerImages() {
       return;
     }
 
-    const payload: DockerImage = {
+    const payload: ContainerImage = {
       id: imageId,
       name: imageForm.value.name.trim(),
       image: imageForm.value.image.trim(),
@@ -201,7 +201,7 @@ export function useDockerImages() {
     await loadImages(configHostId);
   }
 
-  async function deleteImage(image: DockerImage, configHostId: string | null) {
+  async function deleteImage(image: ContainerImage, configHostId: string | null) {
     if (!configHostId) {
       return;
     }
@@ -239,7 +239,7 @@ export function useDockerImages() {
       return;
     }
     await deleteImage(
-      { id: imageForm.value.id, name: imageForm.value.name } as DockerImage,
+      { id: imageForm.value.id, name: imageForm.value.name } as ContainerImage,
       configHostId
     );
     closeImageModal();

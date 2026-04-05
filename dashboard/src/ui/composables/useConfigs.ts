@@ -1,5 +1,5 @@
 import { ref, watch } from "vue";
-import type { EngineConfig, EnvVar, ModelArtifact, DockerImage } from "../types";
+import type { EngineConfig, EnvVar, ModelArtifact, ContainerImage } from "../types";
 import {
   buildVllmArgs,
   createVllmArgsForm,
@@ -25,7 +25,7 @@ import {
   createCustomArgsForm,
   parseCustomArgs
 } from "../engine-args/custom";
-import { createDockerEngineForm } from "../engine-args/docker";
+import { createContainerEngineForm } from "../engine-args/container";
 
 // Defaults keep the config form helpful without forcing a full command line.
 export const defaultCommands: Record<EngineConfig["engine_type"], string> = {
@@ -36,7 +36,7 @@ export const defaultCommands: Record<EngineConfig["engine_type"], string> = {
   fastllm: "ftllm serve",
   KTransformers: "ktransformers-server",
   Custom: "",
-  Docker: "docker"
+  Container: "podman"
 };
 
 export function createEmptyConfigForm() {
@@ -109,7 +109,7 @@ export function useConfigs() {
   const fastllmArgsForm = ref(createFastllmArgsForm());
   const kTransformersArgsForm = ref(createKTransformersArgsForm());
   const customArgsForm = ref(createCustomArgsForm());
-  const dockerEngineForm = ref(createDockerEngineForm());
+  const containerEngineForm = ref(createContainerEngineForm());
 
   const lastEngineType = ref<EngineConfig["engine_type"]>(configForm.value.engine_type);
   watch(
@@ -138,7 +138,7 @@ export function useConfigs() {
     fastllmArgsForm.value = createFastllmArgsForm();
     kTransformersArgsForm.value = createKTransformersArgsForm();
     customArgsForm.value = createCustomArgsForm();
-    dockerEngineForm.value = createDockerEngineForm();
+    containerEngineForm.value = createContainerEngineForm();
   }
 
   function editConfig(config: EngineConfig) {
@@ -150,7 +150,7 @@ export function useConfigs() {
       engine_type: config.engine_type,
       command: config.command,
       envEntries:
-        config.engine_type === "Docker"
+        config.engine_type === "Container"
           ? []
           : config.env.map((item) => ({ key: item.key, value: item.value })),
       working_dir: config.working_dir ?? "",
@@ -158,7 +158,7 @@ export function useConfigs() {
       auto_restart_max_retries: config.auto_restart.max_retries,
       auto_restart_backoff_secs: config.auto_restart.backoff_secs
     };
-    dockerEngineForm.value = createDockerEngineForm();
+    containerEngineForm.value = createContainerEngineForm();
     // Parse args into the right template so the form mirrors existing configs.
     if (config.engine_type === "Vllm" || config.engine_type === "Lvllm") {
       vllmArgsForm.value = parseVllmArgs(config.args ?? []);
@@ -168,24 +168,24 @@ export function useConfigs() {
       fastllmArgsForm.value = parseFastllmArgs(config.args ?? []);
     } else if (config.engine_type === "KTransformers") {
       kTransformersArgsForm.value = parseKTransformersArgs(config.args ?? []);
-    } else if (config.engine_type === "Docker") {
-      const docker = config.docker ?? null;
-      dockerEngineForm.value = {
-        image_id: docker?.image_id ?? "",
-        container_name: docker?.container_name ?? "",
-        extra_ports: docker?.extra_ports ? [...docker.extra_ports] : [],
-        extra_volumes: docker?.extra_volumes ? [...docker.extra_volumes] : [],
-        extra_env: docker?.extra_env
-          ? [...docker.extra_env, ...config.env]
+    } else if (config.engine_type === "Container") {
+      const ct = config.container ?? null;
+      containerEngineForm.value = {
+        image_id: ct?.image_id ?? "",
+        container_name: ct?.container_name ?? "",
+        extra_ports: ct?.extra_ports ? [...ct.extra_ports] : [],
+        extra_volumes: ct?.extra_volumes ? [...ct.extra_volumes] : [],
+        extra_env: ct?.extra_env
+          ? [...ct.extra_env, ...config.env]
           : [...config.env],
-        extra_run_args: docker?.extra_run_args ? [...docker.extra_run_args] : [],
-        gpus: docker?.gpus ?? "",
-        user: docker?.user ?? "",
-        command: docker?.command ?? "",
-        args: docker?.args ? [...docker.args] : [],
-        pull_mode: docker?.pull === true ? "true" : docker?.pull === false ? "false" : "inherit",
+        extra_run_args: ct?.extra_run_args ? [...ct.extra_run_args] : [],
+        gpus: ct?.gpus ?? "",
+        user: ct?.user ?? "",
+        command: ct?.command ?? "",
+        args: ct?.args ? [...ct.args] : [],
+        pull_mode: ct?.pull === true ? "true" : ct?.pull === false ? "false" : "inherit",
         remove_mode:
-          docker?.remove === true ? "true" : docker?.remove === false ? "false" : "inherit"
+          ct?.remove === true ? "true" : ct?.remove === false ? "false" : "inherit"
       };
     } else {
       customArgsForm.value = parseCustomArgs(config.args ?? []);
@@ -300,7 +300,7 @@ export function useConfigs() {
 
   async function saveConfig(
     configHostId: string | null,
-    images: DockerImage[],
+    images: ContainerImage[],
     onSuccess: (nextConfigs: EngineConfig[]) => void
   ) {
     configErrors.value = [];
@@ -316,16 +316,16 @@ export function useConfigs() {
     if (!configForm.value.name.trim()) {
       errors.push("Display name is required.");
     }
-    const isDocker = configForm.value.engine_type === "Docker";
-    if (!isDocker && !configForm.value.command.trim()) {
+    const isContainer = configForm.value.engine_type === "Container";
+    if (!isContainer && !configForm.value.command.trim()) {
       errors.push("Command is required.");
     }
-    if (isDocker && !dockerEngineForm.value.image_id.trim()) {
-      errors.push("Docker image template is required.");
+    if (isContainer && !containerEngineForm.value.image_id.trim()) {
+      errors.push("Container image template is required.");
     }
 
-    const envEntries = isDocker ? [] : buildEnvEntries(configForm.value.envEntries, errors);
-    const extraEnv = isDocker ? buildEnvEntries(dockerEngineForm.value.extra_env, errors) : [];
+    const envEntries = isContainer ? [] : buildEnvEntries(configForm.value.envEntries, errors);
+    const extraEnv = isContainer ? buildEnvEntries(containerEngineForm.value.extra_env, errors) : [];
     if (errors.length) {
       configErrors.value = errors;
       return;
@@ -344,27 +344,27 @@ export function useConfigs() {
       args = buildFastllmArgs(fastllmArgsForm.value);
     } else if (configForm.value.engine_type === "KTransformers") {
       args = buildKTransformersArgs(kTransformersArgsForm.value);
-    } else if (configForm.value.engine_type === "Docker") {
+    } else if (configForm.value.engine_type === "Container") {
       args = [];
     } else {
       args = buildCustomArgs(customArgsForm.value);
     }
 
-    const runtimeCommand = configForm.value.command.trim() || (isDocker ? "docker" : "");
-    const dockerConfig = isDocker
+    const runtimeCommand = configForm.value.command.trim() || (isContainer ? "podman" : "");
+    const containerConfig = isContainer
       ? {
-          image_id: dockerEngineForm.value.image_id.trim(),
-          container_name: dockerEngineForm.value.container_name.trim() || null,
-          extra_ports: cleanStringList(dockerEngineForm.value.extra_ports),
-          extra_volumes: cleanStringList(dockerEngineForm.value.extra_volumes),
+          image_id: containerEngineForm.value.image_id.trim(),
+          container_name: containerEngineForm.value.container_name.trim() || null,
+          extra_ports: cleanStringList(containerEngineForm.value.extra_ports),
+          extra_volumes: cleanStringList(containerEngineForm.value.extra_volumes),
           extra_env: extraEnv,
-          extra_run_args: cleanStringList(dockerEngineForm.value.extra_run_args),
-          gpus: dockerEngineForm.value.gpus.trim() || null,
-          user: dockerEngineForm.value.user.trim() || null,
-          command: dockerEngineForm.value.command.trim() || null,
-          args: cleanStringList(dockerEngineForm.value.args),
-          pull: parseOverride(dockerEngineForm.value.pull_mode),
-          remove: parseOverride(dockerEngineForm.value.remove_mode)
+          extra_run_args: cleanStringList(containerEngineForm.value.extra_run_args),
+          gpus: containerEngineForm.value.gpus.trim() || null,
+          user: containerEngineForm.value.user.trim() || null,
+          command: containerEngineForm.value.command.trim() || null,
+          args: cleanStringList(containerEngineForm.value.args),
+          pull: parseOverride(containerEngineForm.value.pull_mode),
+          remove: parseOverride(containerEngineForm.value.remove_mode)
         }
       : null;
 
@@ -383,7 +383,7 @@ export function useConfigs() {
         max_retries: Number(configForm.value.auto_restart_max_retries) || 0,
         backoff_secs: Number(configForm.value.auto_restart_backoff_secs) || 5
       },
-      ...(dockerConfig ? { docker: dockerConfig } : {})
+      ...(containerConfig ? { container: containerConfig } : {})
     };
 
     const actionLabel = configMode.value === "create" ? "Create config" : "Save changes to config";
@@ -525,7 +525,7 @@ export function useConfigs() {
     fastllmArgsForm,
     kTransformersArgsForm,
     customArgsForm,
-    dockerEngineForm,
+    containerEngineForm,
     resetConfigForm,
     editConfig,
     openConfigModal,

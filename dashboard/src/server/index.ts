@@ -165,7 +165,7 @@ server.get("/api/hosts/:hostId/configs", async (request, reply) => {
   return reply.code(status).send(body);
 });
 
-// Proxy docker image list for a selected host.
+// Proxy container image list for a selected host.
 server.get("/api/hosts/:hostId/images", async (request, reply) => {
   const { hostId } = request.params as { hostId: string };
   const host = await findHost(hostId);
@@ -177,7 +177,7 @@ server.get("/api/hosts/:hostId/images", async (request, reply) => {
   return reply.code(status).send(body);
 });
 
-// Create docker image template on a host.
+// Create container image template on a host.
 server.post("/api/hosts/:hostId/images", async (request, reply) => {
   const { hostId } = request.params as { hostId: string };
   const host = await findHost(hostId);
@@ -192,7 +192,7 @@ server.post("/api/hosts/:hostId/images", async (request, reply) => {
   return reply.code(status).send(body);
 });
 
-// Update docker image template on a host.
+// Update container image template on a host.
 server.put("/api/hosts/:hostId/images/:imageId", async (request, reply) => {
   const { hostId, imageId } = request.params as { hostId: string; imageId: string };
   const host = await findHost(hostId);
@@ -208,7 +208,7 @@ server.put("/api/hosts/:hostId/images/:imageId", async (request, reply) => {
   return reply.code(status).send(body);
 });
 
-// Delete docker image template on a host.
+// Delete container image template on a host.
 server.delete("/api/hosts/:hostId/images/:imageId", async (request, reply) => {
   const { hostId, imageId } = request.params as { hostId: string; imageId: string };
   const host = await findHost(hostId);
@@ -224,7 +224,7 @@ server.delete("/api/hosts/:hostId/images/:imageId", async (request, reply) => {
   return reply.code(status).send(body);
 });
 
-// Prune orphaned aiman-managed Docker images on a host.
+// Prune orphaned aiman-managed container images on a host.
 server.post("/api/hosts/:hostId/images/prune", async (request, reply) => {
   const { hostId } = request.params as { hostId: string };
   const host = await findHost(hostId);

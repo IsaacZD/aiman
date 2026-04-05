@@ -7,20 +7,10 @@ use std::{
 
 use anyhow::Context;
 use aiman_shared::{
-    AutoRestart, DockerBuild, DockerConfig, DockerImage, EngineConfig, EngineInstance, EngineStatus,
-    EngineType, LogEntry, LogSession, LogStream,
-};
-use bollard::{
-    container::LogOutput,
-    models::{ContainerCreateBody, DeviceMapping, HostConfig, PortBinding},
-    query_parameters::{
-        CreateContainerOptions, LogsOptions, RemoveContainerOptions,
-        StartContainerOptions, StopContainerOptions, WaitContainerOptions,
-    },
-    Docker,
+    AutoRestart, ContainerBuild, ContainerConfig, ContainerImage, EngineConfig, EngineInstance,
+    EngineStatus, EngineType, LogEntry, LogSession, LogStream,
 };
 use chrono::Utc;
-use futures_util::StreamExt;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Command,
@@ -37,8 +27,7 @@ const LOG_BUFFER_MAX: usize = 2000;
 // Per-engine state + control handles.
 pub struct EngineHandle {
     pub(super) config: EngineConfig,
-    pub(super) images: Arc<RwLock<HashMap<String, DockerImage>>>,
-    pub(super) docker_client: Arc<Docker>,
+    pub(super) images: Arc<RwLock<HashMap<String, ContainerImage>>>,
     pub(super) instance: Arc<RwLock<EngineInstance>>,
     pub log_buffer: Arc<Mutex<VecDeque<LogEntry>>>,
     pub log_tx: broadcast::Sender<LogEntry>,
@@ -61,8 +50,7 @@ struct EngineControl {
 impl EngineHandle {
     pub(super) fn new(
         config: EngineConfig,
-        images: Arc<RwLock<HashMap<String, DockerImage>>>,
-        docker_client: Arc<Docker>,
+        images: Arc<RwLock<HashMap<String, ContainerImage>>>,
         log_path: PathBuf,
         session_path: PathBuf,
         status_path: PathBuf,
@@ -84,7 +72,6 @@ impl EngineHandle {
         Self {
             config,
             images,
-            docker_client,
             instance: Arc::new(RwLock::new(instance)),
             log_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(LOG_BUFFER_MAX))),
             log_tx,
@@ -141,7 +128,6 @@ impl EngineHandle {
         EngineTaskHandle {
             config: self.config.clone(),
             images: self.images.clone(),
-            docker_client: self.docker_client.clone(),
             instance: self.instance.clone(),
             log_buffer: self.log_buffer.clone(),
             log_tx: self.log_tx.clone(),
@@ -160,8 +146,7 @@ impl EngineHandle {
 // Lightweight clone passed into the async task.
 struct EngineTaskHandle {
     config: EngineConfig,
-    images: Arc<RwLock<HashMap<String, DockerImage>>>,
-    docker_client: Arc<Docker>,
+    images: Arc<RwLock<HashMap<String, ContainerImage>>>,
     instance: Arc<RwLock<EngineInstance>>,
     log_buffer: Arc<Mutex<VecDeque<LogEntry>>>,
     log_tx: broadcast::Sender<LogEntry>,
@@ -175,7 +160,7 @@ struct EngineTaskHandle {
     status_write_lock: Arc<Mutex<()>>,
 }
 
-// Route to Docker API or process-based engine loop.
+// Route to container (podman) or process-based engine loop.
 async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<bool>) {
     let mut retries = 0;
 
@@ -189,8 +174,8 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
         tracing::info!(engine_id = %handle.config.id, "starting engine");
         set_status(&handle, EngineStatus::Starting, None, None).await;
 
-        let result = if matches!(handle.config.engine_type, EngineType::Docker) {
-            run_docker_engine(&handle, &mut stop_rx).await
+        let result = if matches!(handle.config.engine_type, EngineType::Container) {
+            run_container_engine(&handle, &mut stop_rx).await
         } else {
             run_process_engine(&handle, &mut stop_rx).await
         };
@@ -217,51 +202,54 @@ async fn run_engine(handle: Arc<EngineTaskHandle>, mut stop_rx: watch::Receiver<
     }
 }
 
-// ── Docker engine (bollard) ───────────────────────────────────────────────────
+// ── Container engine (podman CLI) ────────────────────────────────────────────
 
-async fn run_docker_engine(
+async fn run_container_engine(
     handle: &Arc<EngineTaskHandle>,
     stop_rx: &mut watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
-    let image = resolve_docker_image(&handle.config, &handle.images).await?;
-    let resolved = resolve_docker_spec(&handle.config, &image);
+    let image = resolve_container_image(&handle.config, &handle.images).await?;
+    let resolved = resolve_container_spec(&handle.config, &image);
 
     // Build/label phase: attach managed-by=aiman label so orphaned images can be pruned.
     if let Some(build) = &resolved.build {
-        build_docker_image(build, &resolved.image, &image.id).await?;
+        build_container_image(build, &resolved.image, &image.id).await?;
     } else if resolved.pull {
-        // No custom Dockerfile: build a one-line FROM wrapper with --pull so Docker
+        // No custom Dockerfile: build a one-line FROM wrapper with --pull so podman
         // fetches the latest registry image and we can attach our labels in one step.
-        label_docker_image(&resolved.image, &image.id).await?;
+        label_container_image(&resolved.image, &image.id).await?;
     }
     // else: pull=false — use the existing local image as-is; no labeling.
 
     // Container name: prefer explicit config, fall back to engine id.
     let container_name = handle
         .config
-        .docker
+        .container
         .as_ref()
-        .map(|d| docker_container_name(&handle.config, d))
+        .map(|c| container_name_from_config(&handle.config, c))
         .unwrap_or_else(|| handle.config.id.clone());
 
-    // Remove any existing container with the same name to avoid 409 conflicts.
-    remove_docker_container(&handle.docker_client, &container_name).await;
+    // Remove any existing container with the same name to avoid conflicts.
+    remove_container(&container_name).await;
 
     // Create container.
-    let container_id =
-        create_docker_container(handle, &resolved, &container_name).await?;
+    let container_id = create_container(&resolved, &container_name).await?;
 
     // Start container.
-    handle
-        .docker_client
-        .start_container(&container_id, None::<StartContainerOptions>)
+    let output = Command::new("podman")
+        .args(["start", &container_id])
+        .output()
         .await
         .context("failed to start container")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("podman start failed: {}", stderr.trim());
+    }
 
     tracing::info!(
         engine_id = %handle.config.id,
         container_id = %container_id,
-        "docker container started"
+        "container started"
     );
 
     let session_id = new_session_id();
@@ -296,7 +284,7 @@ async fn run_docker_engine(
         set_status(handle, EngineStatus::Running, None, Some(now())).await;
     }
 
-    // Spawn log streaming task.
+    // Spawn log streaming task via `podman logs -f`.
     let log_task = {
         let handle = handle.clone();
         let container_id = container_id.clone();
@@ -339,9 +327,9 @@ async fn run_docker_engine(
             }
             _ = stop_rx.changed() => {
                 if *stop_rx.borrow() {
-                    stop_docker_container_api(&handle.docker_client, &container_id).await;
+                    stop_container(&container_id).await;
                     if resolved.remove {
-                        remove_docker_container(&handle.docker_client, &container_id).await;
+                        remove_container(&container_id).await;
                     }
                     set_status(handle, EngineStatus::Stopped, None, None).await;
                     session_stopped_at = Some(now());
@@ -352,10 +340,13 @@ async fn run_docker_engine(
         }
     }
 
-    // Wait for container exit or stop signal.
-    let mut wait_stream = handle
-        .docker_client
-        .wait_container(&container_id, None::<WaitContainerOptions>);
+    // Wait for container exit or stop signal via `podman wait`.
+    let wait_container_id = container_id.clone();
+    let mut wait_child = Command::new("podman")
+        .args(["wait", &wait_container_id])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .context("failed to spawn podman wait")?;
 
     tokio::select! {
         _ = stop_rx.changed() => {
@@ -365,26 +356,34 @@ async fn run_docker_engine(
                     container_id = %container_id,
                     "stop signal received; stopping container"
                 );
-                stop_docker_container_api(&handle.docker_client, &container_id).await;
+                // Kill the wait process first.
+                let _ = wait_child.kill().await;
+                stop_container(&container_id).await;
                 if resolved.remove {
-                    remove_docker_container(&handle.docker_client, &container_id).await;
+                    remove_container(&container_id).await;
                 }
                 set_status(handle, EngineStatus::Stopped, None, None).await;
                 session_stopped_at = Some(now());
             }
         }
-        result = wait_stream.next() => {
-            let code = result
-                .and_then(|r| r.ok())
-                .map(|r| i32::try_from(r.status_code).unwrap_or(-1));
+        result = wait_child.wait() => {
+            // `podman wait` prints the exit code to stdout.
+            let code = if let Ok(wait_output) = wait_child.wait_with_output().await {
+                String::from_utf8_lossy(&wait_output.stdout)
+                    .trim()
+                    .parse::<i32>()
+                    .ok()
+            } else {
+                result.ok().and_then(|s| s.code())
+            };
             tracing::info!(
                 engine_id = %handle.config.id,
                 container_id = %container_id,
                 exit_code = code,
-                "docker container exited"
+                "container exited"
             );
             if resolved.remove {
-                remove_docker_container(&handle.docker_client, &container_id).await;
+                remove_container(&container_id).await;
             }
             set_exit_status(handle, code).await;
             session_stopped_at = Some(now());
@@ -427,21 +426,21 @@ async fn finalize_session(
 }
 
 /// Pull-only path: build a one-line `FROM <image>` Dockerfile with --pull so
-/// Docker fetches the latest registry image and we can attach aiman labels in
+/// podman fetches the latest registry image and we can attach aiman labels in
 /// the same step.  The resulting local image keeps the original tag.
-async fn label_docker_image(image: &str, image_config_id: &str) -> anyhow::Result<()> {
+async fn label_container_image(image: &str, image_config_id: &str) -> anyhow::Result<()> {
     let image = image.trim();
     if image.is_empty() {
-        anyhow::bail!("docker image is required for pull");
+        anyhow::bail!("container image is required for pull");
     }
-    tracing::info!(image = %image, image_config_id = %image_config_id, "labeling docker image via build");
+    tracing::info!(image = %image, image_config_id = %image_config_id, "labeling container image via build");
 
     let build_dir = std::env::temp_dir()
         .join(format!("aiman-label-{}", Utc::now().timestamp_millis()));
     tokio::fs::create_dir_all(&build_dir).await?;
     tokio::fs::write(build_dir.join("Dockerfile"), format!("FROM {image}")).await?;
 
-    let output = Command::new("docker")
+    let output = Command::new("podman")
         .arg("build")
         .arg("-t").arg(image)
         .arg("--pull")
@@ -453,177 +452,102 @@ async fn label_docker_image(image: &str, image_config_id: &str) -> anyhow::Resul
     let _ = tokio::fs::remove_dir_all(&build_dir).await;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("docker label step failed: {}", stderr.trim());
+        anyhow::bail!("podman label step failed: {}", stderr.trim());
     }
     Ok(())
 }
 
-/// Build the bollard container config and call create_container.
-async fn create_docker_container(
-    handle: &Arc<EngineTaskHandle>,
-    resolved: &ResolvedDockerSpec,
+/// Build the `podman create` command and return the container ID.
+async fn create_container(
+    resolved: &ResolvedContainerSpec,
     container_name: &str,
 ) -> anyhow::Result<String> {
-    // Port bindings: "host:container" or "host:container/proto".
-    let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
-    let mut exposed_port_list: Vec<String> = Vec::new();
+    let mut cmd = Command::new("podman");
+    cmd.arg("create");
+
+    // Container name.
+    cmd.arg("--name").arg(container_name);
+
+    // Labels.
+    cmd.arg("--label").arg("managed-by=aiman");
+
+    // Port bindings: "host:container[/proto]".
     for port_spec in &resolved.ports {
         let spec = port_spec.trim();
-        if spec.is_empty() {
-            continue;
+        if !spec.is_empty() {
+            cmd.arg("-p").arg(spec);
         }
-        // Format: [host_ip:]host_port:container_port[/proto]
-        let parts: Vec<&str> = spec.splitn(3, ':').collect();
-        let (host_port, container_port_proto) = match parts.len() {
-            2 => (parts[0], parts[1]),
-            3 => (parts[1], parts[2]),
-            _ => continue,
-        };
-        // container_port may include /proto; add default /tcp if not.
-        let container_key = if container_port_proto.contains('/') {
-            container_port_proto.to_string()
-        } else {
-            format!("{container_port_proto}/tcp")
-        };
-        exposed_port_list.push(container_key.clone());
-        port_bindings.insert(
-            container_key,
-            Some(vec![PortBinding {
-                host_ip: None,
-                host_port: Some(host_port.to_string()),
-            }]),
-        );
     }
 
-    // Volume bindings: "/host:/container[:options]"
-    let binds: Vec<String> = resolved
-        .volumes
-        .iter()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .collect();
-
-    // GPU devices: map to /dev/nvidia* device paths.
-    let devices = resolved.gpus.as_deref().and_then(|gpus| {
-        if gpus.is_empty() {
-            return None;
+    // Volume bindings: "/host:/container[:options]".
+    for vol in &resolved.volumes {
+        let vol = vol.trim();
+        if !vol.is_empty() {
+            cmd.arg("-v").arg(vol);
         }
+    }
 
-        let mut device_mappings = Vec::new();
+    // Environment variables.
+    for env in &resolved.env {
+        if !env.key.trim().is_empty() {
+            cmd.arg("-e").arg(format!("{}={}", env.key, env.value));
+        }
+    }
 
-        // Always include control devices
-        device_mappings.push(DeviceMapping {
-            path_on_host: Some("/dev/nvidiactl".into()),
-            path_in_container: Some("/dev/nvidiactl".into()),
-            cgroup_permissions: Some("rwm".into()),
-        });
-        device_mappings.push(DeviceMapping {
-            path_on_host: Some("/dev/nvidia-uvm".into()),
-            path_in_container: Some("/dev/nvidia-uvm".into()),
-            cgroup_permissions: Some("rwm".into()),
-        });
-        device_mappings.push(DeviceMapping {
-            path_on_host: Some("/dev/nvidia-uvm-tools".into()),
-            path_in_container: Some("/dev/nvidia-uvm-tools".into()),
-            cgroup_permissions: Some("rwm".into()),
-        });
-
-        // Add GPU devices based on the gpus value
-        if gpus == "all" {
-            // Add devices 0-15 (should cover most systems)
-            for i in 0..16 {
-                device_mappings.push(DeviceMapping {
-                    path_on_host: Some(format!("/dev/nvidia{}", i)),
-                    path_in_container: Some(format!("/dev/nvidia{}", i)),
-                    cgroup_permissions: Some("rwm".into()),
-                });
-            }
-        } else {
-            // Parse specific GPU IDs (e.g., "0", "0,1", "1,3")
-            for gpu_id in gpus.split(',') {
-                let gpu_id = gpu_id.trim();
-                if let Ok(id) = gpu_id.parse::<u32>() {
-                    device_mappings.push(DeviceMapping {
-                        path_on_host: Some(format!("/dev/nvidia{}", id)),
-                        path_in_container: Some(format!("/dev/nvidia{}", id)),
-                        cgroup_permissions: Some("rwm".into()),
-                    });
+    // GPU devices via CDI.
+    if let Some(gpus) = &resolved.gpus {
+        let gpus = gpus.trim();
+        if !gpus.is_empty() {
+            if gpus == "all" {
+                cmd.arg("--device").arg("nvidia.com/gpu=all");
+            } else {
+                // Specific GPU IDs (e.g., "0", "0,1", "1,3").
+                for gpu_id in gpus.split(',') {
+                    let gpu_id = gpu_id.trim();
+                    if !gpu_id.is_empty() {
+                        cmd.arg("--device").arg(format!("nvidia.com/gpu={gpu_id}"));
+                    }
                 }
             }
         }
+    }
 
-        Some(device_mappings)
-    });
+    // User override.
+    if let Some(user) = resolved.user.as_ref().map(|v| v.trim()).filter(|v| !v.is_empty()) {
+        cmd.arg("--user").arg(user);
+    }
 
-    let host_config = HostConfig {
-        port_bindings: if port_bindings.is_empty() {
-            None
-        } else {
-            Some(port_bindings)
-        },
-        binds: if binds.is_empty() { None } else { Some(binds) },
-        devices,
-        ..Default::default()
-    };
+    // Image.
+    cmd.arg(resolved.image.trim());
 
-    // Env: "KEY=VALUE"
-    let env: Vec<String> = resolved
-        .env
-        .iter()
-        .filter(|e| !e.key.trim().is_empty())
-        .map(|e| format!("{}={}", e.key, e.value))
-        .collect();
-
-    // Command: entrypoint override + args.
-    let cmd: Option<Vec<String>> = {
-        let mut parts: Vec<String> = Vec::new();
-        if let Some(command) = resolved
-            .command
-            .as_ref()
-            .map(|v| v.trim())
-            .filter(|v| !v.is_empty())
-        {
-            parts.extend(split_command_input(command));
+    // Command + args (entrypoint override).
+    if let Some(command) = resolved
+        .command
+        .as_ref()
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+    {
+        for part in split_command_input(command) {
+            cmd.arg(part);
         }
-        for arg in &resolved.args {
-            parts.extend(split_command_input(arg));
+    }
+    for arg in &resolved.args {
+        for part in split_command_input(arg) {
+            cmd.arg(part);
         }
-        if parts.is_empty() { None } else { Some(parts) }
-    };
+    }
 
-    let config = ContainerCreateBody {
-        image: Some(resolved.image.trim().to_string()),
-        cmd,
-        env: if env.is_empty() { None } else { Some(env) },
-        user: resolved
-            .user
-            .as_ref()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty()),
-        exposed_ports: if exposed_port_list.is_empty() {
-            None
-        } else {
-            Some(exposed_port_list)
-        },
-        host_config: Some(host_config),
-        ..Default::default()
-    };
+    let output = cmd.output().await.context("failed to run podman create")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("podman create failed: {}", stderr.trim());
+    }
 
-    let options = CreateContainerOptions {
-        name: Some(container_name.to_string()),
-        platform: String::new(),
-    };
-
-    let response = handle
-        .docker_client
-        .create_container(Some(options), config)
-        .await
-        .context("failed to create container")?;
-
-    Ok(response.id)
+    let container_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(container_id)
 }
 
-/// Stream container stdout/stderr via bollard into the log buffer.
+/// Stream container stdout/stderr via `podman logs -f` into the log buffer.
 async fn stream_container_logs(
     handle: Arc<EngineTaskHandle>,
     container_id: String,
@@ -631,38 +555,51 @@ async fn stream_container_logs(
     ready_tx: Option<watch::Sender<bool>>,
     ready_marker: Option<String>,
 ) {
-    let mut logs = handle.docker_client.logs(
-        &container_id,
-        Some(LogsOptions {
-            follow: true,
-            stdout: true,
-            stderr: true,
-            timestamps: false,
-            ..Default::default()
-        }),
-    );
+    let mut child = match Command::new("podman")
+        .args(["logs", "-f", &container_id])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(err) => {
+            tracing::debug!(engine_id = %handle.config.id, error = %err, "failed to spawn podman logs");
+            return;
+        }
+    };
 
-    while let Some(result) = logs.next().await {
-        let (stream, bytes) = match result {
-            Ok(LogOutput::StdOut { message }) => (LogStream::Stdout, message),
-            Ok(LogOutput::StdErr { message }) => (LogStream::Stderr, message),
-            Ok(_) => continue,
-            Err(err) => {
-                tracing::debug!(engine_id = %handle.config.id, error = %err, "log stream error");
-                break;
-            }
-        };
-        let line = String::from_utf8_lossy(&bytes).trim_end_matches('\n').to_string();
-        if line.is_empty() {
-            continue;
-        }
-        if let (Some(tx), Some(marker)) = (&ready_tx, &ready_marker) {
-            if line.contains(marker) {
-                let _ = tx.send(true);
-            }
-        }
-        emit_log(&handle, stream, &session_id, line).await;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let stdout_task = stdout.map(|out| {
+        let handle = handle.clone();
+        let session_id = session_id.clone();
+        let ready_tx = ready_tx.clone();
+        let ready_marker = ready_marker.clone();
+        tokio::spawn(async move {
+            stream_logs(handle, BufReader::new(out), LogStream::Stdout, session_id, ready_tx, ready_marker).await;
+        })
+    });
+
+    let stderr_task = stderr.map(|err| {
+        let handle = handle.clone();
+        let session_id = session_id.clone();
+        let ready_tx = ready_tx.clone();
+        let ready_marker = ready_marker.clone();
+        tokio::spawn(async move {
+            stream_logs(handle, BufReader::new(err), LogStream::Stderr, session_id, ready_tx, ready_marker).await;
+        })
+    });
+
+    if let Some(task) = stdout_task {
+        let _ = task.await;
     }
+    if let Some(task) = stderr_task {
+        let _ = task.await;
+    }
+
+    // Ensure the child process is cleaned up.
+    let _ = child.wait().await;
 
     tracing::debug!(engine_id = %handle.config.id, "container log stream ended");
 }
@@ -671,38 +608,49 @@ async fn stream_container_logs(
 async fn poll_container_health(handle: Arc<EngineTaskHandle>, container_id: String) {
     loop {
         tokio::time::sleep(Duration::from_secs(30)).await;
-        match handle.docker_client.inspect_container(&container_id, None).await {
-            Ok(info) => {
-                let health_status = info
-                    .state
-                    .and_then(|s| s.health)
-                    .and_then(|h| h.status)
-                    .map(|s| s.to_string());
-                if let Some(status) = health_status {
+        let output = Command::new("podman")
+            .args(["inspect", "--format", "{{.State.Health.Status}}", &container_id])
+            .output()
+            .await;
+        match output {
+            Ok(out) if out.status.success() => {
+                let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !status.is_empty() {
                     let mut instance = handle.instance.write().await;
                     instance.health = Some(status);
                 }
             }
-            Err(_) => break, // Container gone; task will be aborted anyway.
+            _ => break, // Container gone; task will be aborted anyway.
         }
     }
 }
 
-async fn stop_docker_container_api(docker: &Docker, container_id: &str) {
-    let options = StopContainerOptions { t: Some(10), signal: None };
-    if let Err(err) = docker.stop_container(container_id, Some(options)).await {
+async fn stop_container(container_id: &str) {
+    let result = Command::new("podman")
+        .args(["stop", "-t", "10", container_id])
+        .output()
+        .await;
+    if let Err(err) = result {
         tracing::warn!(container_id = %container_id, error = %err, "failed to stop container");
+    } else if let Ok(out) = result {
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            tracing::warn!(container_id = %container_id, error = %stderr.trim(), "failed to stop container");
+        }
     }
 }
 
-async fn remove_docker_container(docker: &Docker, container_id: &str) {
-    let options = RemoveContainerOptions { force: true, ..Default::default() };
-    if let Err(err) = docker.remove_container(container_id, Some(options)).await {
+async fn remove_container(container_id: &str) {
+    let result = Command::new("podman")
+        .args(["rm", "-f", container_id])
+        .output()
+        .await;
+    if let Err(err) = result {
         tracing::warn!(container_id = %container_id, error = %err, "failed to remove container");
     }
 }
 
-// ── Process engine (non-Docker) ──────────────────────────────────────────────
+// ── Process engine (non-container) ──────────────────────────────────────────
 
 async fn run_process_engine(
     handle: &Arc<EngineTaskHandle>,
@@ -847,7 +795,7 @@ async fn run_process_engine(
     Ok(())
 }
 
-// Build and spawn the engine child process (non-Docker).
+// Build and spawn the engine child process (non-container).
 async fn spawn_process(config: &EngineConfig) -> anyhow::Result<tokio::process::Child> {
     tracing::debug!(
         engine_id = %config.id,
@@ -947,9 +895,9 @@ fn split_command_input(input: &str) -> Vec<String> {
     tokens
 }
 
-// ── Docker spec resolution ────────────────────────────────────────────────────
+// ── Container spec resolution ────────────────────────────────────────────────
 
-struct ResolvedDockerSpec {
+struct ResolvedContainerSpec {
     image: String,
     ports: Vec<String>,
     volumes: Vec<String>,
@@ -960,34 +908,34 @@ struct ResolvedDockerSpec {
     gpus: Option<String>,
     pull: bool,
     remove: bool,
-    build: Option<DockerBuild>,
+    build: Option<ContainerBuild>,
 }
 
-async fn resolve_docker_image(
+async fn resolve_container_image(
     config: &EngineConfig,
-    images: &Arc<RwLock<HashMap<String, DockerImage>>>,
-) -> anyhow::Result<DockerImage> {
-    let docker = config
-        .docker
+    images: &Arc<RwLock<HashMap<String, ContainerImage>>>,
+) -> anyhow::Result<ContainerImage> {
+    let container = config
+        .container
         .as_ref()
-        .context("docker config missing")?;
+        .context("container config missing")?;
     let images = images.read().await;
     images
-        .get(&docker.image_id)
+        .get(&container.image_id)
         .cloned()
-        .context("docker image not found")
+        .context("container image not found")
 }
 
-fn resolve_docker_spec(config: &EngineConfig, image: &DockerImage) -> ResolvedDockerSpec {
-    let docker = config.docker.as_ref();
-    let extra_ports = docker
-        .map(|d| d.extra_ports.clone())
+fn resolve_container_spec(config: &EngineConfig, image: &ContainerImage) -> ResolvedContainerSpec {
+    let container = config.container.as_ref();
+    let extra_ports = container
+        .map(|c| c.extra_ports.clone())
         .unwrap_or_default();
-    let extra_volumes = docker
-        .map(|d| d.extra_volumes.clone())
+    let extra_volumes = container
+        .map(|c| c.extra_volumes.clone())
         .unwrap_or_default();
-    let extra_env = docker
-        .map(|d| d.extra_env.clone())
+    let extra_env = container
+        .map(|c| c.extra_env.clone())
         .unwrap_or_default();
 
     let mut ports = image.ports.clone();
@@ -998,34 +946,34 @@ fn resolve_docker_spec(config: &EngineConfig, image: &DockerImage) -> ResolvedDo
     env.extend(extra_env);
     env.extend(config.env.clone());
 
-    let pull = docker
-        .and_then(|d| d.pull)
+    let pull = container
+        .and_then(|c| c.pull)
         .unwrap_or(image.pull);
-    let remove = docker
-        .and_then(|d| d.remove)
+    let remove = container
+        .and_then(|c| c.remove)
         .unwrap_or(image.remove);
 
-    let user = docker
-        .and_then(|d| d.user.clone())
+    let user = container
+        .and_then(|c| c.user.clone())
         .filter(|v| !v.trim().is_empty())
         .or_else(|| image.user.clone());
-    let command = docker
-        .and_then(|d| d.command.clone())
+    let command = container
+        .and_then(|c| c.command.clone())
         .filter(|v| !v.trim().is_empty())
         .or_else(|| image.command.clone());
 
     let mut args = image.args.clone();
-    if let Some(d) = docker {
-        args.extend(d.args.iter().cloned());
+    if let Some(c) = container {
+        args.extend(c.args.iter().cloned());
     }
 
-    // DockerConfig.gpus overrides image-level gpus when set.
-    let gpus = docker
-        .and_then(|d| d.gpus.clone())
+    // ContainerConfig.gpus overrides image-level gpus when set.
+    let gpus = container
+        .and_then(|c| c.gpus.clone())
         .filter(|v| !v.trim().is_empty())
         .or_else(|| image.gpus.clone());
 
-    ResolvedDockerSpec {
+    ResolvedContainerSpec {
         image: image.image.clone(),
         ports,
         volumes,
@@ -1040,8 +988,8 @@ fn resolve_docker_spec(config: &EngineConfig, image: &DockerImage) -> ResolvedDo
     }
 }
 
-fn docker_container_name(config: &EngineConfig, docker: &DockerConfig) -> String {
-    docker
+fn container_name_from_config(config: &EngineConfig, container: &ContainerConfig) -> String {
+    container
         .container_name
         .as_ref()
         .map(|v| v.trim())
@@ -1050,16 +998,16 @@ fn docker_container_name(config: &EngineConfig, docker: &DockerConfig) -> String
         .unwrap_or_else(|| config.id.clone())
 }
 
-// ── Docker image build (CLI — kept for tar-context simplicity) ────────────────
+// ── Container image build (podman CLI) ──────────────────────────────────────
 
-async fn build_docker_image(
-    build: &DockerBuild,
+async fn build_container_image(
+    build: &ContainerBuild,
     image: &str,
     image_config_id: &str,
 ) -> anyhow::Result<()> {
     let image = image.trim();
     if image.is_empty() {
-        anyhow::bail!("docker image is required for build");
+        anyhow::bail!("container image is required for build");
     }
     let content = build
         .dockerfile_content
@@ -1073,7 +1021,7 @@ async fn build_docker_image(
     tokio::fs::create_dir_all(&build_dir).await?;
     tokio::fs::write(build_dir.join("Dockerfile"), content).await?;
 
-    let mut command = Command::new("docker");
+    let mut command = Command::new("podman");
     command.arg("build").arg("-t").arg(image);
     command
         .arg("--label").arg("managed-by=aiman")
@@ -1103,12 +1051,12 @@ async fn build_docker_image(
         } else {
             stdout.trim()
         };
-        anyhow::bail!("docker build failed: {}", detail);
+        anyhow::bail!("podman build failed: {}", detail);
     }
     Ok(())
 }
 
-// ── Shared log helpers ────────────────────────────────────────────────────────
+// ── Shared log helpers ──────────────────────────────────────────────────────
 
 async fn emit_log(
     handle: &Arc<EngineTaskHandle>,
@@ -1158,7 +1106,7 @@ async fn stream_logs<R: tokio::io::AsyncRead + Unpin>(
     );
 }
 
-// ── Status helpers ────────────────────────────────────────────────────────────
+// ── Status helpers ──────────────────────────────────────────────────────────
 
 async fn set_status(
     handle: &EngineTaskHandle,

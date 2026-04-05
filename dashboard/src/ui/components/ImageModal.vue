@@ -9,7 +9,7 @@
         <p v-for="error in errors" :key="error">{{ error }}</p>
       </div>
       <form class="config-form" @submit.prevent="$emit('submit')">
-        <DockerImageFields v-model="form" :id-locked="mode === 'edit'" />
+        <ContainerImageFields v-model="form" :id-locked="mode === 'edit'" />
         <div class="form-actions">
           <button
             v-if="mode === 'edit'"
@@ -29,7 +29,7 @@
 </template>
 
 <script setup lang="ts">
-import DockerImageFields from "./DockerImageFields.vue";
+import ContainerImageFields from "./ContainerImageFields.vue";
 
 defineProps<{
   show: boolean;
