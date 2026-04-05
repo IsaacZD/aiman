@@ -11,6 +11,8 @@ let
     "AIMAN_HARDWARE_GPU_TIMEOUT_SECS=${toString cfg.hardwareGpuTimeoutSecs}";
   hardwareSkipGpuEnv = lib.optional (cfg.hardwareSkipGpu != null)
     "AIMAN_HARDWARE_SKIP_GPU=${if cfg.hardwareSkipGpu then "1" else "0"}";
+  nvmlEnv = lib.optional (cfg.nvmlLibraryPath != null)
+    "LD_LIBRARY_PATH=${cfg.nvmlLibraryPath}";
   configStore = cfg.configStore;
   dataDir = cfg.dataDir;
   baseEnv = [
@@ -18,7 +20,7 @@ let
     "AIMAN_DATA_DIR=${dataDir}"
     "AIMAN_CONFIG_STORE=${configStore}"
   ];
-  fullEnv = baseEnv ++ apiKeyEnv ++ seedEnv ++ tokioEnv ++ hardwareTtlEnv ++ hardwareGpuTimeoutEnv ++ hardwareSkipGpuEnv ++ envList;
+  fullEnv = baseEnv ++ apiKeyEnv ++ seedEnv ++ tokioEnv ++ hardwareTtlEnv ++ hardwareGpuTimeoutEnv ++ hardwareSkipGpuEnv ++ nvmlEnv ++ envList;
 
   isDefaultDataDir = cfg.dataDir == "/var/lib/aiman/agent";
   isDefaultStore = cfg.configStore == "/var/lib/aiman/agent/configs.json";
@@ -108,6 +110,17 @@ in
       type = lib.types.nullOr lib.types.bool;
       default = null;
       description = "Skip GPU probing in hardware info.";
+    };
+
+    nvmlLibraryPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Path to the directory containing libnvidia-ml.so, enabling richer
+        GPU metrics via NVML (utilization, temperature, power). When null,
+        the agent falls back to nvidia-smi or lspci.
+        Example: "''${config.hardware.nvidia.package}/lib"
+      '';
     };
 
     extraPackages = lib.mkOption {

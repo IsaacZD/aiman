@@ -28,7 +28,11 @@ pub struct GpuInfo {
     pub name: Option<String>,
     pub vendor: Option<String>,
     pub memory_total_mb: Option<u64>,
+    pub memory_used_mb: Option<u64>,
     pub driver_version: Option<String>,
+    pub utilization_percent: Option<u32>,
+    pub temperature_celsius: Option<u32>,
+    pub power_usage_watts: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -129,15 +133,61 @@ async fn collect_gpus(gpu_timeout: Duration, skip_gpu: bool) -> Vec<GpuInfo> {
         return Vec::new();
     }
 
+    // 1. NVML (preferred — richer runtime metrics, no subprocess overhead)
+    let nvml_result = tokio::task::spawn_blocking(collect_nvidia_gpus_nvml).await.ok().flatten();
+    if let Some(gpus) = nvml_result {
+        return gpus;
+    }
+
+    // 2. nvidia-smi subprocess fallback
     if let Some(gpus) = collect_nvidia_gpus(gpu_timeout).await {
         return gpus;
     }
 
+    // 3. lspci fallback for non-NVML environments
     if let Some(gpus) = collect_lspci_gpus(gpu_timeout).await {
         return gpus;
     }
 
     Vec::new()
+}
+
+fn collect_nvidia_gpus_nvml() -> Option<Vec<GpuInfo>> {
+    use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
+    use nvml_wrapper::Nvml;
+
+    let nvml = Nvml::init().ok()?;
+    let driver_version = nvml.sys_driver_version().ok();
+    let device_count = nvml.device_count().ok()?;
+
+    let mut gpus = Vec::new();
+    for i in 0..device_count {
+        let device = match nvml.device_by_index(i) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        let name = device.name().ok();
+        let memory_info = device.memory_info().ok();
+        let memory_total_mb = memory_info.as_ref().map(|m| m.total / (1024 * 1024));
+        let memory_used_mb = memory_info.as_ref().map(|m| m.used / (1024 * 1024));
+        let utilization_percent = device.utilization_rates().ok().map(|u| u.gpu);
+        let temperature_celsius = device.temperature(TemperatureSensor::Gpu).ok();
+        let power_usage_watts = device.power_usage().ok().map(|mw| mw as f64 / 1000.0);
+
+        gpus.push(GpuInfo {
+            name,
+            vendor: Some("NVIDIA".to_string()),
+            memory_total_mb,
+            memory_used_mb,
+            driver_version: driver_version.clone(),
+            utilization_percent,
+            temperature_celsius,
+            power_usage_watts,
+        });
+    }
+
+    Some(gpus)
 }
 
 async fn collect_nvidia_gpus(gpu_timeout: Duration) -> Option<Vec<GpuInfo>> {
@@ -164,7 +214,11 @@ async fn collect_nvidia_gpus(gpu_timeout: Duration) -> Option<Vec<GpuInfo>> {
             name,
             vendor: Some("NVIDIA".to_string()),
             memory_total_mb,
+            memory_used_mb: None,
             driver_version,
+            utilization_percent: None,
+            temperature_celsius: None,
+            power_usage_watts: None,
         });
     }
 
@@ -197,7 +251,11 @@ async fn collect_lspci_gpus(gpu_timeout: Duration) -> Option<Vec<GpuInfo>> {
             name,
             vendor: None,
             memory_total_mb: None,
+            memory_used_mb: None,
             driver_version: None,
+            utilization_percent: None,
+            temperature_celsius: None,
+            power_usage_watts: None,
         });
     }
 
