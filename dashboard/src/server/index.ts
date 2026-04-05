@@ -405,6 +405,58 @@ server.get("/api/benchmarks", async () => {
   return { results, local: localRecords };
 });
 
+// Bridge SSE event stream from host agent -> browser.
+server.get("/api/hosts/:hostId/events", async (request, reply) => {
+  const { hostId } = request.params as { hostId: string };
+  const host = await findHost(hostId);
+  if (!host) {
+    return reply.code(404).send({ error: "unknown host" });
+  }
+
+  // Hijack response so Fastify doesn't finalize it while we stream.
+  reply.hijack();
+
+  let agentRes: Response;
+  try {
+    agentRes = await fetch(`${host.base_url}/v1/events`, {
+      headers: {
+        Accept: "text/event-stream",
+        ...(host.api_key ? { Authorization: `Bearer ${host.api_key}` } : {})
+      }
+    });
+  } catch {
+    reply.raw.writeHead(502);
+    reply.raw.end();
+    return;
+  }
+
+  if (!agentRes.ok || !agentRes.body) {
+    reply.raw.writeHead(502);
+    reply.raw.end();
+    return;
+  }
+
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive"
+  });
+
+  try {
+    // Node.js 18+ ReadableStream is AsyncIterable; cast via unknown for TS compatibility.
+    for await (const chunk of agentRes.body as unknown as AsyncIterable<Uint8Array>) {
+      if (!reply.raw.writable) break;
+      reply.raw.write(chunk);
+    }
+  } catch {
+    // upstream closed or client disconnected
+  } finally {
+    if (reply.raw.writable) {
+      reply.raw.end();
+    }
+  }
+});
+
 // Bridge WS log stream from host -> browser.
 server.get(
   "/api/hosts/:hostId/engines/:engineId/logs/ws",

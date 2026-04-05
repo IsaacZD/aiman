@@ -42,6 +42,7 @@ pub struct EngineHandle {
     pub(super) instance: Arc<RwLock<EngineInstance>>,
     pub log_buffer: Arc<Mutex<VecDeque<LogEntry>>>,
     pub log_tx: broadcast::Sender<LogEntry>,
+    pub(super) status_tx: broadcast::Sender<EngineInstance>,
     control: Mutex<EngineControl>,
     pub log_path: PathBuf,
     pub session_path: PathBuf,
@@ -65,6 +66,7 @@ impl EngineHandle {
         log_path: PathBuf,
         session_path: PathBuf,
         status_path: PathBuf,
+        status_tx: broadcast::Sender<EngineInstance>,
     ) -> Self {
         let instance = EngineInstance {
             id: config.id.clone(),
@@ -86,6 +88,7 @@ impl EngineHandle {
             instance: Arc::new(RwLock::new(instance)),
             log_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(LOG_BUFFER_MAX))),
             log_tx,
+            status_tx,
             control: Mutex::new(EngineControl {
                 stop_tx: None,
                 task: None,
@@ -142,6 +145,7 @@ impl EngineHandle {
             instance: self.instance.clone(),
             log_buffer: self.log_buffer.clone(),
             log_tx: self.log_tx.clone(),
+            status_tx: self.status_tx.clone(),
             log_path: self.log_path.clone(),
             session_path: self.session_path.clone(),
             status_path: self.status_path.clone(),
@@ -161,6 +165,8 @@ struct EngineTaskHandle {
     instance: Arc<RwLock<EngineInstance>>,
     log_buffer: Arc<Mutex<VecDeque<LogEntry>>>,
     log_tx: broadcast::Sender<LogEntry>,
+    // Broadcast engine status changes to SSE subscribers.
+    status_tx: broadcast::Sender<EngineInstance>,
     log_path: PathBuf,
     session_path: PathBuf,
     status_path: PathBuf,
@@ -1131,6 +1137,8 @@ async fn set_status(
     let snapshot = instance.clone();
     drop(instance);
     append_jsonl(&handle.status_path, &handle.status_write_lock, &snapshot).await;
+    // Push status change to SSE subscribers; ignore if no receivers.
+    let _ = handle.status_tx.send(snapshot.clone());
     tracing::debug!(
         engine_id = %handle.config.id,
         status = ?snapshot.status,
@@ -1148,6 +1156,8 @@ async fn set_exit_status(handle: &EngineTaskHandle, code: Option<i32>) {
     let snapshot = instance.clone();
     drop(instance);
     append_jsonl(&handle.status_path, &handle.status_write_lock, &snapshot).await;
+    // Push exit status to SSE subscribers; ignore if no receivers.
+    let _ = handle.status_tx.send(snapshot.clone());
     tracing::debug!(
         engine_id = %handle.config.id,
         exit_code = code,

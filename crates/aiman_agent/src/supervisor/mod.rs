@@ -18,7 +18,9 @@ use bollard::{
     Docker,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
+
+use crate::hardware::HardwareInfo;
 
 use self::store::append_jsonl;
 
@@ -34,6 +36,9 @@ pub struct Supervisor {
     benchmark_path: PathBuf,
     benchmark_write_lock: Arc<Mutex<()>>,
     docker_client: Arc<Docker>,
+    // Broadcast channels for reactive push to SSE clients.
+    status_tx: broadcast::Sender<EngineInstance>,
+    hardware_tx: broadcast::Sender<HardwareInfo>,
 }
 
 impl Supervisor {
@@ -67,6 +72,11 @@ impl Supervisor {
         let images = Arc::new(RwLock::new(images_to_map(&images_vec)));
         let benchmark_path = data_dir.join("benchmarks.jsonl");
 
+        // Broadcast channels: capacity 256 for status events (one per transition),
+        // 16 for hardware (periodic, low frequency).
+        let (status_tx, _) = broadcast::channel::<EngineInstance>(256);
+        let (hardware_tx, _) = broadcast::channel::<HardwareInfo>(16);
+
         for config in configs_vec {
             let id = config.id.clone();
             tracing::debug!(engine_id = %id, "registering engine config");
@@ -80,6 +90,7 @@ impl Supervisor {
                     data_dir.join("logs").join(format!("{id}.jsonl")),
                     data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
                     data_dir.join("status").join(format!("{id}.jsonl")),
+                    status_tx.clone(),
                 )),
             );
         }
@@ -94,6 +105,8 @@ impl Supervisor {
             benchmark_path,
             benchmark_write_lock: Arc::new(Mutex::new(())),
             docker_client,
+            status_tx,
+            hardware_tx,
         })
     }
 
@@ -224,6 +237,7 @@ impl Supervisor {
                 self.data_dir.join("logs").join(format!("{id}.jsonl")),
                 self.data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
                 self.data_dir.join("status").join(format!("{id}.jsonl")),
+                self.status_tx.clone(),
             )),
         );
 
@@ -266,6 +280,7 @@ impl Supervisor {
                 self.data_dir.join("logs").join(format!("{id}.jsonl")),
                 self.data_dir.join("logs").join(format!("{id}-sessions.jsonl")),
                 self.data_dir.join("status").join(format!("{id}.jsonl")),
+                self.status_tx.clone(),
             )),
         );
 
@@ -343,6 +358,19 @@ impl Supervisor {
             }
         }
         Ok(removed)
+    }
+
+    pub fn subscribe_status(&self) -> broadcast::Receiver<EngineInstance> {
+        self.status_tx.subscribe()
+    }
+
+    pub fn subscribe_hardware(&self) -> broadcast::Receiver<HardwareInfo> {
+        self.hardware_tx.subscribe()
+    }
+
+    /// Returns a clone of the hardware sender so the polling task in main can push updates.
+    pub fn hardware_tx(&self) -> broadcast::Sender<HardwareInfo> {
+        self.hardware_tx.clone()
     }
 
     pub fn benchmark_path(&self) -> &PathBuf {

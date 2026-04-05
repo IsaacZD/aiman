@@ -14,9 +14,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::api::{
     benchmark_engine, create_config, create_image, delete_config, delete_image, engine_log_sessions,
-    engine_logs, engine_logs_ws, engine_status_history, get_engine, get_image, hardware_info,
-    health, list_benchmarks, list_configs, list_engines, list_images, prune_images, scan_models,
-    start_engine, stop_engine, update_config, update_image,
+    engine_logs, engine_logs_ws, engine_status_history, events_sse, get_engine, get_image,
+    hardware_info, health, list_benchmarks, list_configs, list_engines, list_images, prune_images,
+    scan_models, start_engine, stop_engine, update_config, update_image,
 };
 use crate::auth::auth_middleware;
 use crate::hardware::HardwareCache;
@@ -81,9 +81,24 @@ fn main() {
         hardware_cache: Arc::new(tokio::sync::Mutex::new(HardwareCache::from_env())),
     };
 
+    // Spawn background task: push hardware snapshots every 10 seconds to SSE clients.
+    {
+        let hw_tx = state.supervisor.hardware_tx();
+        let hw_cache = state.hardware_cache.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                let hardware = hw_cache.lock().await.get().await;
+                let _ = hw_tx.send(hardware);
+            }
+        });
+    }
+
     // HTTP API surface for control + observability.
     let app = Router::new()
         .route("/health", get(health))
+        .route("/v1/events", get(events_sse))
         .route("/v1/hardware", get(hardware_info))
         .route("/v1/configs", get(list_configs).post(create_config))
         .route("/v1/configs/{id}", put(update_config).delete(delete_config))

@@ -1,12 +1,14 @@
 use axum::{
     extract::{Path, State, WebSocketUpgrade},
     http::StatusCode,
-    response::IntoResponse,
+    response::{sse::{Event, KeepAlive, Sse}, IntoResponse},
     Json,
 };
 use serde_json::json;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{stream, SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use tokio::sync::broadcast;
 
 use aiman_shared::{
     DockerImage, EngineConfig, EngineInstance, EngineStatus, EngineType, LogEntry, LogSession,
@@ -25,6 +27,45 @@ pub async fn health() -> &'static str {
 pub async fn hardware_info(State(state): State<AppState>) -> Json<HardwareResponse> {
     let hardware = state.hardware_cache.lock().await.get().await;
     Json(HardwareResponse { hardware })
+}
+
+/// SSE stream that pushes engine status changes and periodic hardware snapshots.
+/// Clients subscribe once and receive push updates without polling.
+pub async fn events_sse(State(state): State<AppState>) -> impl IntoResponse {
+    let status_rx = state.supervisor.subscribe_status();
+    let hardware_rx = state.supervisor.subscribe_hardware();
+
+    let event_stream = stream::unfold(
+        (status_rx, hardware_rx),
+        |(mut srx, mut hrx)| async move {
+            loop {
+                tokio::select! {
+                    result = srx.recv() => {
+                        match result {
+                            Ok(instance) => {
+                                let data = json!({"type": "engine_status", "instance": instance}).to_string();
+                                return Some((Ok::<Event, Infallible>(Event::default().data(data)), (srx, hrx)));
+                            }
+                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(broadcast::error::RecvError::Closed) => return None,
+                        }
+                    }
+                    result = hrx.recv() => {
+                        match result {
+                            Ok(hw) => {
+                                let data = json!({"type": "hardware", "hardware": hw}).to_string();
+                                return Some((Ok::<Event, Infallible>(Event::default().data(data)), (srx, hrx)));
+                            }
+                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(broadcast::error::RecvError::Closed) => return None,
+                        }
+                    }
+                }
+            }
+        },
+    );
+
+    Sse::new(event_stream).keep_alive(KeepAlive::default())
 }
 
 pub async fn list_engines(State(state): State<AppState>) -> Json<EnginesResponse> {

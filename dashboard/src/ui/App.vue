@@ -210,6 +210,7 @@ import ConfigModal from "./components/ConfigModal.vue";
 import ImageModal from "./components/ImageModal.vue";
 
 import { useEngines } from "./composables/useEngines";
+import { useEvents } from "./composables/useEvents";
 import { useHosts } from "./composables/useHosts";
 import { useLogs } from "./composables/useLogs";
 import { useConfigs } from "./composables/useConfigs";
@@ -258,14 +259,15 @@ const {
   currentSessionId,
   connectLogs,
   disconnectLogs,
-  startSessionAutoRefresh,
-  stopSessionAutoRefresh,
+  notifyEngineStatusChanged,
   scheduleLogHistoryLoad,
   loadLogHistory,
   loadLogSessions,
   selectCurrentSession,
   clearLogsState
 } = useLogs();
+
+const { connect: connectEvents, disconnect: disconnectEvents } = useEvents();
 
 const {
   configs,
@@ -376,17 +378,11 @@ function openDetailModal(engine: EngineItem) {
   showDetailModal.value = true;
   connectLogs(engine);
   void loadLogSessions(engine);
-  startSessionAutoRefresh(
-    () => showDetailModal.value,
-    () => loadLogSessions(selected.value),
-    () => loadLogHistory(selected.value)
-  );
 }
 
 function closeDetailModal() {
   showDetailModal.value = false;
   clearLogsState();
-  stopSessionAutoRefresh();
   disconnectLogs();
 }
 
@@ -455,6 +451,26 @@ async function refreshAll() {
     if (hosts.value.length && hostMode.value === "create" && !hostForm.value.id) {
       resetHostForm();
     }
+
+    // (Re-)connect SSE streams now that the host list is known.
+    connectEvents(hosts.value, {
+      onEngineStatus(hostId, instance) {
+        // Patch the engine entry in-place so the UI stays reactive.
+        const idx = engines.value.findIndex(
+          (e) => e.host.id === hostId && e.instance.id === instance.id
+        );
+        if (idx !== -1) {
+          engines.value[idx] = { ...engines.value[idx], instance };
+        }
+        // If the log modal is open for this engine, trigger a session reload.
+        if (showDetailModal.value && selected.value?.instance.id === instance.id) {
+          notifyEngineStatusChanged(selected.value);
+        }
+      },
+      onHardware(hostId, hardware) {
+        hardwareByHost.value[hostId] = hardware;
+      }
+    });
 
     // Load config names and hardware for each host in parallel.
     const nextConfigNameByHost: Record<string, Record<string, string>> = {};
@@ -530,6 +546,6 @@ onMounted(refreshAll);
 
 onBeforeUnmount(() => {
   disconnectLogs();
-  stopSessionAutoRefresh();
+  disconnectEvents();
 });
 </script>

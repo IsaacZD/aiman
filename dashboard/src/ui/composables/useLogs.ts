@@ -10,7 +10,6 @@ export function useLogs() {
   let ws: WebSocket | null = null;
   let historyLoadTimer: number | null = null;
   let historyRequestId = 0;
-  let sessionRefreshTimer: number | null = null;
 
   const currentSessionId = computed(() => {
     const running = logSessions.value.find((session) => !session.stopped_at);
@@ -46,25 +45,12 @@ export function useLogs() {
     }
   }
 
-  function startSessionAutoRefresh(
-    isModalOpen: () => boolean,
-    reloadSessions: () => void,
-    reloadHistory: () => void
-  ) {
-    stopSessionAutoRefresh();
-    sessionRefreshTimer = window.setInterval(() => {
-      if (isModalOpen()) {
-        void reloadSessions();
-        void reloadHistory();
-      }
-    }, 5000);
-  }
-
-  function stopSessionAutoRefresh() {
-    if (sessionRefreshTimer !== null) {
-      window.clearInterval(sessionRefreshTimer);
-      sessionRefreshTimer = null;
-    }
+  /// Called when an engine_status SSE event arrives for the currently-viewed engine.
+  /// Triggers a one-shot reload of sessions + history (history reload is scheduled
+  /// inside loadLogSessions once the session list settles).
+  function notifyEngineStatusChanged(engine: EngineItem | null) {
+    if (!engine) return;
+    void loadLogSessions(engine);
   }
 
   function scheduleLogHistoryLoad(loadFn: () => Promise<void>) {
@@ -175,8 +161,7 @@ export function useLogs() {
     currentSessionId,
     connectLogs,
     disconnectLogs,
-    startSessionAutoRefresh,
-    stopSessionAutoRefresh,
+    notifyEngineStatusChanged,
     scheduleLogHistoryLoad,
     loadLogHistory,
     loadLogSessions,
