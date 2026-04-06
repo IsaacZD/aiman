@@ -1,17 +1,27 @@
-{ config, lib, pkgs, ... }:
-
-let
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}: let
   cfg = config.services.aiman_agent;
   envList = lib.mapAttrsToList (name: value: "${name}=${toString value}") cfg.environment;
   apiKeyEnv = lib.optional (cfg.apiKey != null) "AIMAN_API_KEY=${cfg.apiKey}";
   seedEnv = lib.optional (cfg.seedConfig != null) "AIMAN_ENGINES_CONFIG=${cfg.seedConfig}";
   tokioEnv = lib.optional (cfg.tokioWorkers != null) "AIMAN_TOKIO_WORKERS=${toString cfg.tokioWorkers}";
   hardwareTtlEnv = lib.optional (cfg.hardwareTtlSecs != null) "AIMAN_HARDWARE_TTL_SECS=${toString cfg.hardwareTtlSecs}";
-  hardwareGpuTimeoutEnv = lib.optional (cfg.hardwareGpuTimeoutSecs != null)
+  hardwareGpuTimeoutEnv =
+    lib.optional (cfg.hardwareGpuTimeoutSecs != null)
     "AIMAN_HARDWARE_GPU_TIMEOUT_SECS=${toString cfg.hardwareGpuTimeoutSecs}";
-  hardwareSkipGpuEnv = lib.optional (cfg.hardwareSkipGpu != null)
-    "AIMAN_HARDWARE_SKIP_GPU=${if cfg.hardwareSkipGpu then "1" else "0"}";
-  nvmlEnv = lib.optional (cfg.nvmlLibraryPath != null)
+  hardwareSkipGpuEnv =
+    lib.optional (cfg.hardwareSkipGpu != null)
+    "AIMAN_HARDWARE_SKIP_GPU=${
+      if cfg.hardwareSkipGpu
+      then "1"
+      else "0"
+    }";
+  nvmlEnv =
+    lib.optional (cfg.nvmlLibraryPath != null)
     "LD_LIBRARY_PATH=${cfg.nvmlLibraryPath}";
   configStore = cfg.configStore;
   dataDir = cfg.dataDir;
@@ -28,9 +38,7 @@ let
     (lib.optional isDefaultDataDir "d ${cfg.dataDir} 0750 ${cfg.user} ${cfg.group} -")
     ++ (lib.optional isDefaultStore "d /var/lib/aiman/agent 0750 ${cfg.user} ${cfg.group} -")
     ++ (lib.optional isDefaultStore "f ${cfg.configStore} 0640 ${cfg.user} ${cfg.group} -");
-
-in
-{
+in {
   options.services.aiman_agent = {
     enable = lib.mkEnableOption "aiman agent";
 
@@ -75,7 +83,7 @@ in
       default = "127.0.0.1";
       description = "Host ipv4 address for the agent API.";
     };
-    
+
     port = lib.mkOption {
       type = lib.types.int;
       default = 4010;
@@ -156,9 +164,9 @@ in
 
     systemd.services.aiman_agent = {
       description = "aiman agent";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" ];
-      path = cfg.extraPackages;
+      wantedBy = ["multi-user.target"];
+      after = ["network.target"];
+      path = cfg.extraPackages ++ [pkgs.podman];
       serviceConfig = {
         Type = "simple";
         User = cfg.user;
@@ -172,6 +180,6 @@ in
 
     systemd.tmpfiles.rules = tmpRules;
 
-    networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
+    networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [cfg.port];
   };
 }
