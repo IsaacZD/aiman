@@ -29,3 +29,12 @@ lint:
 # Run both agent and dashboard (in foreground, agent first)
 all: build-ui
   @echo "Run 'just agent' and 'just dashboard-only' in separate terminals"
+
+# Clean build artifacts
+clean:
+  cargo clean
+  rm -rf dashboard/dist
+
+# Clean everything including node_modules
+clean-all: clean
+  rm -rf dashboard/node_modules
