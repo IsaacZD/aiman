@@ -2,7 +2,7 @@
   <div class="app-shell">
     <!-- Topbar -->
     <header class="topbar">
-      <span class="topbar-brand">aiman</span>
+      <img class="topbar-brand-icon" src="/favicon.svg" alt="aiman" />
       <div class="topbar-stats">
         <span class="topbar-stat">
           <span class="topbar-stat-dot hosts"></span>
