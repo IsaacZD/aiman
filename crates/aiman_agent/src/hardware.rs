@@ -1,9 +1,9 @@
-use serde::{Deserialize, Serialize};
+use std::pin::Pin;
 use std::time::{Duration, Instant};
+use serde::{Deserialize, Serialize};
 use sysinfo::System;
-use tokio::io::AsyncReadExt;
-use tokio::process::Command;
 use tokio::time::timeout;
+use process_wrap::tokio::*;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HardwareInfo {
@@ -267,41 +267,25 @@ async fn run_command_with_timeout(
     args: &[&str],
     timeout_duration: Duration,
 ) -> Option<Vec<u8>> {
-    let mut child = Command::new(command)
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
-
-    // Capture stdout in a separate task so we can wait with a timeout without
-    // moving the child process handle.
-    let stdout_handle = child.stdout.take().map(|mut stdout| {
-        tokio::spawn(async move {
-            let mut buffer = Vec::new();
-            let _ = stdout.read_to_end(&mut buffer).await;
-            buffer
-        })
+    let mut wrap = CommandWrap::with_new(command, |cmd| {
+        cmd.args(args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
     });
+    wrap.wrap(ProcessGroup::leader());
+    // wait_with_output consumes the child, so a single timeout covers both
+    // stdout collection and process exit. On timeout the future is dropped
+    // which triggers process-group cleanup via the ProcessGroup wrapper.
+    let result = timeout(timeout_duration, Pin::from(wrap.spawn().ok()?.wait_with_output())).await;
 
-    let status = match timeout(timeout_duration, child.wait()).await {
-        Ok(Ok(status)) => status,
-        _ => {
-            // Best-effort cleanup if the command stalls or errors.
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            return None;
-        }
+    let output = match result {
+        Ok(Ok(output)) => output,
+        _ => return None,
     };
 
-    if !status.success() {
+    if !output.status.success() {
         return None;
     }
 
-    let stdout = match stdout_handle {
-        Some(handle) => handle.await.ok().unwrap_or_default(),
-        None => Vec::new(),
-    };
-
-    Some(stdout)
+    Some(output.stdout)
 }

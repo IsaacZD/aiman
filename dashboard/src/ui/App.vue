@@ -474,6 +474,8 @@ async function refreshAll() {
 
     // Load config names and hardware for each host in parallel.
     const nextConfigNameByHost: Record<string, Record<string, string>> = {};
+    const nextHardwareByHost: Record<string, import("./types").HardwareInfo | null> = {};
+    const nextHardwareErrorsByHost: Record<string, string> = {};
     await Promise.all(
       hosts.value.map(async (host) => {
         try {
@@ -496,19 +498,21 @@ async function refreshAll() {
         try {
           const res = await fetch(`/api/hosts/${host.id}/hardware`);
           if (!res.ok) {
-            hardwareErrorsByHost.value[host.id] = `Hardware unavailable (HTTP ${res.status}).`;
-            hardwareByHost.value[host.id] = null;
+            nextHardwareErrorsByHost[host.id] = `Hardware unavailable (HTTP ${res.status}).`;
+            nextHardwareByHost[host.id] = null;
             return;
           }
           const body = (await res.json()) as { hardware?: import("./types").HardwareInfo };
-          hardwareByHost.value[host.id] = body.hardware ?? null;
+          nextHardwareByHost[host.id] = body.hardware ?? null;
         } catch (err) {
-          hardwareErrorsByHost.value[host.id] = (err as Error).message;
-          hardwareByHost.value[host.id] = null;
+          nextHardwareErrorsByHost[host.id] = (err as Error).message;
+          nextHardwareByHost[host.id] = null;
         }
       })
     );
     configNameByHost.value = nextConfigNameByHost;
+    hardwareByHost.value = nextHardwareByHost;
+    hardwareErrorsByHost.value = nextHardwareErrorsByHost;
 
     const ok = await refreshEngines(hosts.value, nextConfigNameByHost);
     if (!ok) {

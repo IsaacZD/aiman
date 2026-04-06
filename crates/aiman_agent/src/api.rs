@@ -133,18 +133,20 @@ pub async fn engine_logs_ws(
     Ok(ws.on_upgrade(move |socket| async move {
         tracing::info!(engine_id = %id, "engine logs websocket connected");
         let mut rx = handle.log_tx.subscribe();
-        let buffer = { handle.log_buffer.lock().await.clone() };
-
         let (mut sender, mut receiver) = socket.split();
 
-        for entry in buffer {
-            if let Ok(text) = serde_json::to_string(&entry) {
-                if sender
-                    .send(axum::extract::ws::Message::Text(text.into()))
-                    .await
-                    .is_err()
-                {
-                    return;
+        // Replay buffered entries without cloning the entire VecDeque.
+        {
+            let buffer = handle.log_buffer.lock().await;
+            for entry in buffer.iter() {
+                if let Ok(text) = serde_json::to_string(entry) {
+                    if sender
+                        .send(axum::extract::ws::Message::Text(text.into()))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
                 }
             }
         }

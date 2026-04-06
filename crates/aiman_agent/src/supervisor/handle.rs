@@ -19,7 +19,56 @@ use tokio::{
 };
 
 use super::error::SupervisorError;
-use super::store::{append_jsonl, append_session};
+use super::store::LogWriter;
+
+/// Normalize a container image name for Podman.
+///
+/// Unlike Docker, Podman doesn't automatically assume `docker.io` for short names.
+/// This function ensures images without an explicit registry get the `docker.io/` prefix.
+///
+/// Examples:
+/// - `nginx` → `docker.io/library/nginx`
+/// - `vllm/vllm-openai:latest` → `docker.io/vllm/vllm-openai:latest`
+/// - `ghcr.io/foo/bar:v1` → `ghcr.io/foo/bar:v1` (unchanged)
+fn normalize_image_name(image: &str) -> String {
+    let image = image.trim();
+    // Split off the tag/digest to analyze the name part.
+    let (name, suffix) = if let Some(at) = image.rfind('@') {
+        (&image[..at], &image[at..])
+    } else if let Some(colon) = image.rfind(':') {
+        // Make sure it's a tag colon, not a port in the registry.
+        let before_colon = &image[..colon];
+        if before_colon.contains('/') || !before_colon.contains('.') {
+            (&image[..colon], &image[colon..])
+        } else {
+            (image, "")
+        }
+    } else {
+        (image, "")
+    };
+
+    let parts: Vec<&str> = name.split('/').collect();
+    match parts.len() {
+        1 => {
+            // Library image: nginx → docker.io/library/nginx
+            format!("docker.io/library/{name}{suffix}")
+        }
+        2 => {
+            // Check if first part looks like a registry (has a dot or colon).
+            if parts[0].contains('.') || parts[0].contains(':') {
+                // Already has registry: localhost/foo, myregistry.com/bar
+                image.to_string()
+            } else {
+                // User image: vllm/vllm-openai → docker.io/vllm/vllm-openai
+                format!("docker.io/{name}{suffix}")
+            }
+        }
+        _ => {
+            // 3+ parts: likely already fully qualified (e.g., ghcr.io/owner/repo)
+            image.to_string()
+        }
+    }
+}
 
 // Keep a bounded in-memory log buffer per engine for WS backfill.
 const LOG_BUFFER_MAX: usize = 2000;
@@ -36,9 +85,9 @@ pub struct EngineHandle {
     pub log_path: PathBuf,
     pub session_path: PathBuf,
     pub status_path: PathBuf,
-    log_write_lock: Arc<Mutex<()>>,
-    session_write_lock: Arc<Mutex<()>>,
-    status_write_lock: Arc<Mutex<()>>,
+    log_writer: LogWriter,
+    session_writer: LogWriter,
+    status_writer: LogWriter,
 }
 
 // Control plane state for stopping/restarting a running task.
@@ -80,12 +129,12 @@ impl EngineHandle {
                 stop_tx: None,
                 task: None,
             }),
+            log_writer: LogWriter::new(log_path.clone()),
+            session_writer: LogWriter::new(session_path.clone()),
+            status_writer: LogWriter::new(status_path.clone()),
             log_path,
             session_path,
             status_path,
-            log_write_lock: Arc::new(Mutex::new(())),
-            session_write_lock: Arc::new(Mutex::new(())),
-            status_write_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -132,12 +181,9 @@ impl EngineHandle {
             log_buffer: self.log_buffer.clone(),
             log_tx: self.log_tx.clone(),
             status_tx: self.status_tx.clone(),
-            log_path: self.log_path.clone(),
-            session_path: self.session_path.clone(),
-            status_path: self.status_path.clone(),
-            log_write_lock: self.log_write_lock.clone(),
-            session_write_lock: self.session_write_lock.clone(),
-            status_write_lock: self.status_write_lock.clone(),
+            log_writer: self.log_writer.clone(),
+            session_writer: self.session_writer.clone(),
+            status_writer: self.status_writer.clone(),
         }
     }
 }
@@ -152,12 +198,9 @@ struct EngineTaskHandle {
     log_tx: broadcast::Sender<LogEntry>,
     // Broadcast engine status changes to SSE subscribers.
     status_tx: broadcast::Sender<EngineInstance>,
-    log_path: PathBuf,
-    session_path: PathBuf,
-    status_path: PathBuf,
-    log_write_lock: Arc<Mutex<()>>,
-    session_write_lock: Arc<Mutex<()>>,
-    status_write_lock: Arc<Mutex<()>>,
+    log_writer: LogWriter,
+    session_writer: LogWriter,
+    status_writer: LogWriter,
 }
 
 // Route to container (podman) or process-based engine loop.
@@ -254,16 +297,11 @@ async fn run_container_engine(
 
     let session_id = new_session_id();
     let session_started_at = now();
-    append_session(
-        &handle.session_path,
-        &handle.session_write_lock,
-        &LogSession {
-            id: session_id.clone(),
-            started_at: session_started_at.clone(),
-            stopped_at: None,
-        },
-    )
-    .await;
+    handle.session_writer.append(&LogSession {
+        id: session_id.clone(),
+        started_at: session_started_at.clone(),
+        stopped_at: None,
+    }).await;
 
     // Determine whether we wait for a ready marker before setting Running.
     let wait_for_ready = matches!(
@@ -411,16 +449,11 @@ async fn finalize_session(
     health_task: JoinHandle<()>,
 ) {
     let stopped_at = session_stopped_at.unwrap_or_else(now);
-    append_session(
-        &handle.session_path,
-        &handle.session_write_lock,
-        &LogSession {
-            id: session_id,
-            started_at: session_started_at,
-            stopped_at: Some(stopped_at),
-        },
-    )
-    .await;
+    handle.session_writer.append(&LogSession {
+        id: session_id,
+        started_at: session_started_at,
+        stopped_at: Some(stopped_at),
+    }).await;
     health_task.abort();
     let _ = log_task.await;
 }
@@ -433,16 +466,18 @@ async fn label_container_image(image: &str, image_config_id: &str) -> anyhow::Re
     if image.is_empty() {
         anyhow::bail!("container image is required for pull");
     }
-    tracing::info!(image = %image, image_config_id = %image_config_id, "labeling container image via build");
+    // Normalize image name for Podman (e.g., vllm/vllm-openai → docker.io/vllm/vllm-openai).
+    let normalized = normalize_image_name(image);
+    tracing::info!(image = %image, normalized = %normalized, image_config_id = %image_config_id, "labeling container image via build");
 
     let build_dir = std::env::temp_dir()
         .join(format!("aiman-label-{}", Utc::now().timestamp_millis()));
     tokio::fs::create_dir_all(&build_dir).await?;
-    tokio::fs::write(build_dir.join("Dockerfile"), format!("FROM {image}")).await?;
+    tokio::fs::write(build_dir.join("Dockerfile"), format!("FROM {normalized}")).await?;
 
     let output = Command::new("podman")
         .arg("build")
-        .arg("-t").arg(image)
+        .arg("-t").arg(&normalized)
         .arg("--pull")
         .arg("--label").arg("managed-by=aiman")
         .arg("--label").arg(format!("aiman.image-id={image_config_id}"))
@@ -670,16 +705,11 @@ async fn run_process_engine(
     let (ready_tx, mut ready_rx) = watch::channel(false);
     let session_id = new_session_id();
     let session_started_at = now();
-    append_session(
-        &handle.session_path,
-        &handle.session_write_lock,
-        &LogSession {
-            id: session_id.clone(),
-            started_at: session_started_at.clone(),
-            stopped_at: None,
-        },
-    )
-    .await;
+    handle.session_writer.append(&LogSession {
+        id: session_id.clone(),
+        started_at: session_started_at.clone(),
+        stopped_at: None,
+    }).await;
     let mut session_stopped_at: Option<String> = None;
     tracing::info!(
         engine_id = %handle.config.id,
@@ -775,16 +805,11 @@ async fn run_process_engine(
     }
 
     let stopped_at = session_stopped_at.unwrap_or_else(now);
-    append_session(
-        &handle.session_path,
-        &handle.session_write_lock,
-        &LogSession {
-            id: session_id,
-            started_at: session_started_at,
-            stopped_at: Some(stopped_at),
-        },
-    )
-    .await;
+    handle.session_writer.append(&LogSession {
+        id: session_id,
+        started_at: session_started_at,
+        stopped_at: Some(stopped_at),
+    }).await;
 
     if let Some(task) = stdout_task {
         let _ = task.await;
@@ -974,7 +999,7 @@ fn resolve_container_spec(config: &EngineConfig, image: &ContainerImage) -> Reso
         .or_else(|| image.gpus.clone());
 
     ResolvedContainerSpec {
-        image: image.image.clone(),
+        image: normalize_image_name(&image.image),
         ports,
         volumes,
         env,
@@ -1077,7 +1102,7 @@ async fn emit_log(
         }
         buffer.push_back(entry.clone());
     }
-    append_jsonl(&handle.log_path, &handle.log_write_lock, &entry).await;
+    handle.log_writer.append(&entry).await;
     let _ = handle.log_tx.send(entry);
 }
 
@@ -1124,7 +1149,7 @@ async fn set_status(
     }
     let snapshot = instance.clone();
     drop(instance);
-    append_jsonl(&handle.status_path, &handle.status_write_lock, &snapshot).await;
+    handle.status_writer.append(&snapshot).await;
     // Push status change to SSE subscribers; ignore if no receivers.
     let _ = handle.status_tx.send(snapshot.clone());
     tracing::debug!(
@@ -1143,7 +1168,7 @@ async fn set_exit_status(handle: &EngineTaskHandle, code: Option<i32>) {
     instance.last_exit_at = Some(now());
     let snapshot = instance.clone();
     drop(instance);
-    append_jsonl(&handle.status_path, &handle.status_write_lock, &snapshot).await;
+    handle.status_writer.append(&snapshot).await;
     // Push exit status to SSE subscribers; ignore if no receivers.
     let _ = handle.status_tx.send(snapshot.clone());
     tracing::debug!(

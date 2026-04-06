@@ -11,7 +11,9 @@ export function useEngines() {
 
   const engineCount = computed(() => engines.value.length);
 
-  const enginesByHost = computed(() => {
+  const enginesByHost = ref<Record<string, EngineItem[]>>({});
+
+  function rebuildEnginesByHost() {
     const grouped: Record<string, EngineItem[]> = {};
     for (const host of Object.keys(engineResultsByHost.value)) {
       if (!grouped[host]) {
@@ -30,8 +32,8 @@ export function useEngines() {
         (a.configName ?? a.instance.id).localeCompare(b.configName ?? b.instance.id)
       );
     }
-    return grouped;
-  });
+    enginesByHost.value = grouped;
+  }
 
   function updateConfigNameMapForHost(hostId: string, hostConfigs: EngineConfig[]) {
     const map: Record<string, string> = {};
@@ -49,6 +51,7 @@ export function useEngines() {
       }
       return { ...engine, configName };
     });
+    rebuildEnginesByHost();
   }
 
   async function startEngine(engine: EngineItem, onSuccess: () => Promise<void>) {
@@ -93,6 +96,7 @@ export function useEngines() {
     engines.value = nextEngines;
     engineResultsByHost.value = nextEngineResultsByHost;
     lastRefreshed.value = new Date().toLocaleTimeString();
+    rebuildEnginesByHost();
     return true;
   }
 

@@ -14,11 +14,11 @@ use std::{
 
 use aiman_shared::{ContainerImage, EngineConfig, EngineInstance, EngineStatus, EngineType};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::{broadcast, RwLock};
 
 use crate::hardware::HardwareInfo;
 
-use self::store::append_jsonl;
+use self::store::LogWriter;
 
 #[derive(Clone)]
 // Supervisor holds engine handles and mediates lifecycle control.
@@ -30,7 +30,7 @@ pub struct Supervisor {
     images: Arc<RwLock<HashMap<String, ContainerImage>>>,
     images_path: PathBuf,
     benchmark_path: PathBuf,
-    benchmark_write_lock: Arc<Mutex<()>>,
+    benchmark_writer: LogWriter,
     // Broadcast channels for reactive push to SSE clients.
     status_tx: broadcast::Sender<EngineInstance>,
     hardware_tx: broadcast::Sender<HardwareInfo>,
@@ -94,8 +94,8 @@ impl Supervisor {
             handles: Arc::new(RwLock::new(handles)),
             images,
             images_path,
+            benchmark_writer: LogWriter::new(benchmark_path.clone()),
             benchmark_path,
-            benchmark_write_lock: Arc::new(Mutex::new(())),
             status_tx,
             hardware_tx,
         })
@@ -384,7 +384,7 @@ impl Supervisor {
     }
 
     pub async fn append_benchmark<T: Serialize>(&self, record: &T) {
-        append_jsonl(&self.benchmark_path, &self.benchmark_write_lock, record).await;
+        self.benchmark_writer.append(record).await;
     }
 }
 
@@ -448,7 +448,15 @@ async fn persist_config_store(path: &PathBuf, configs: &HashMap<String, EngineCo
     let mut values: Vec<_> = configs.values().cloned().collect();
     values.sort_by(|a, b| a.id.cmp(&b.id));
     if let Ok(serialized) = serde_json::to_string_pretty(&values) {
-        let _ = tokio::fs::write(path, serialized).await;
+        let path = path.clone();
+        if let Err(err) = tokio::task::spawn_blocking(move || {
+            store::atomic_write_json(&path, serialized.as_bytes())
+        })
+        .await
+        .unwrap_or_else(|err| Err(anyhow::anyhow!("{err}")))
+        {
+            tracing::error!(error = %err, "failed to persist config store");
+        }
     }
 }
 
@@ -456,7 +464,15 @@ async fn persist_image_store(path: &PathBuf, images: &HashMap<String, ContainerI
     let mut values: Vec<_> = images.values().cloned().collect();
     values.sort_by(|a, b| a.id.cmp(&b.id));
     if let Ok(serialized) = serde_json::to_string_pretty(&values) {
-        let _ = tokio::fs::write(path, serialized).await;
+        let path = path.clone();
+        if let Err(err) = tokio::task::spawn_blocking(move || {
+            store::atomic_write_json(&path, serialized.as_bytes())
+        })
+        .await
+        .unwrap_or_else(|err| Err(anyhow::anyhow!("{err}")))
+        {
+            tracing::error!(error = %err, "failed to persist image store");
+        }
     }
 }
 
