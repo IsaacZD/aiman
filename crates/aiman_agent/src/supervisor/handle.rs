@@ -1,3 +1,9 @@
+//! Engine handle implementation with process lifecycle management.
+//!
+//! This module uses unsafe code for POSIX process group management
+//! (setpgid, killpg) which is necessary for proper subprocess cleanup.
+#![allow(unsafe_code)]
+
 use std::{
     collections::{HashMap, VecDeque},
     path::PathBuf,
@@ -297,7 +303,7 @@ async fn run_container_engine(
 
     let session_id = new_session_id();
     let session_started_at = now();
-    handle.session_writer.append(&LogSession {
+    let _ = handle.session_writer.append(&LogSession {
         id: session_id.clone(),
         started_at: session_started_at.clone(),
         stopped_at: None,
@@ -449,7 +455,7 @@ async fn finalize_session(
     health_task: JoinHandle<()>,
 ) {
     let stopped_at = session_stopped_at.unwrap_or_else(now);
-    handle.session_writer.append(&LogSession {
+    let _ = handle.session_writer.append(&LogSession {
         id: session_id,
         started_at: session_started_at,
         stopped_at: Some(stopped_at),
@@ -705,7 +711,7 @@ async fn run_process_engine(
     let (ready_tx, mut ready_rx) = watch::channel(false);
     let session_id = new_session_id();
     let session_started_at = now();
-    handle.session_writer.append(&LogSession {
+    let _ = handle.session_writer.append(&LogSession {
         id: session_id.clone(),
         started_at: session_started_at.clone(),
         stopped_at: None,
@@ -805,7 +811,7 @@ async fn run_process_engine(
     }
 
     let stopped_at = session_stopped_at.unwrap_or_else(now);
-    handle.session_writer.append(&LogSession {
+    let _ = handle.session_writer.append(&LogSession {
         id: session_id,
         started_at: session_started_at,
         stopped_at: Some(stopped_at),
@@ -1102,7 +1108,7 @@ async fn emit_log(
         }
         buffer.push_back(entry.clone());
     }
-    handle.log_writer.append(&entry).await;
+    let _ = handle.log_writer.append(&entry).await;
     let _ = handle.log_tx.send(entry);
 }
 
@@ -1149,7 +1155,7 @@ async fn set_status(
     }
     let snapshot = instance.clone();
     drop(instance);
-    handle.status_writer.append(&snapshot).await;
+    let _ = handle.status_writer.append(&snapshot).await;
     // Push status change to SSE subscribers; ignore if no receivers.
     let _ = handle.status_tx.send(snapshot.clone());
     tracing::debug!(
@@ -1168,7 +1174,7 @@ async fn set_exit_status(handle: &EngineTaskHandle, code: Option<i32>) {
     instance.last_exit_at = Some(now());
     let snapshot = instance.clone();
     drop(instance);
-    handle.status_writer.append(&snapshot).await;
+    let _ = handle.status_writer.append(&snapshot).await;
     // Push exit status to SSE subscribers; ignore if no receivers.
     let _ = handle.status_tx.send(snapshot.clone());
     tracing::debug!(

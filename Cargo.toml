@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/aiman_agent",
+  "crates/aiman_dashboard",
   "crates/shared",
 ]
 resolver = "2"
@@ -8,3 +9,67 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "MIT"
+
+# Strict compiler checks - catch errors at compile time
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+unused_imports = "warn"
+dead_code = "warn"
+
+[workspace.lints.clippy]
+# Groups at lower priority so individual lints can override
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Individual lints at default priority
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "deny"
+indexing_slicing = "warn"
+missing_errors_doc = "warn"
+# Allow some pedantic lints that are too noisy
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_panics_doc = "allow"
+
+[workspace.dependencies]
+# Web framework
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+
+# Async runtime
+tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "signal", "sync", "process", "fs", "io-util"] }
+futures-util = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.9"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+rev_buf_reader = "0.3"
+
+# System info
+sysinfo = "0.30"
+nvml-wrapper = "0.10"
+libc = "0.2"
+
+# Process management
+process-wrap = { version = "9", features = ["tokio1"] }
+tempfile = "3"
+
+# Internal
+aiman-shared = { path = "crates/shared" }

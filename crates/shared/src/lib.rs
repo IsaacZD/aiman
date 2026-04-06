@@ -1,8 +1,26 @@
-//! Shared data contracts between agent and dashboard.
-//! Keep this crate dependency-light so both sides can reuse it for schemas.
+//! Shared data contracts and utilities between agent and dashboard.
+//!
+//! This crate provides:
+//! - Data types for engine configuration, status, and logging
+//! - Hardware information types
+//! - JSONL storage utilities
+//! - HTTP proxy client (with `http` feature)
+//! - Common error handling (with `http` feature)
+//!
 //! Design note: engine_type strings are consumed by both the Rust agent and the
 //! dashboard UI, so renames should be additive and serialized names should be
 //! explicit when the on-wire value differs from the Rust enum variant.
+
+pub mod error;
+pub mod hardware;
+#[cfg(feature = "http")]
+pub mod http;
+pub mod storage;
+
+// Re-export commonly used types at the crate root
+pub use error::CommonError;
+pub use hardware::{GpuInfo, HardwareInfo};
+pub use storage::{LogWriter, StorageError};
 
 use serde::{Deserialize, Serialize};
 

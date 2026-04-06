@@ -2,8 +2,8 @@
 
 ## Project Structure & Module Organization
 - `crates/aiman_agent/` — Rust binary that runs on LLM servers (process supervision, API, log streaming).
-- `crates/shared/` — Shared Rust types used by host and dashboard.
-- `dashboard/src/server/` — Fastify server that proxies host APIs and serves the UI.
+- `crates/aiman_dashboard/` — Rust binary that proxies agent APIs and serves the Vue UI.
+- `crates/shared/` — Shared Rust types and utilities (hardware info, storage, HTTP client, error handling).
 - `dashboard/src/ui/` — Vue 3 UI (Vite).
 - `configs-example/` — Sample host/engine TOML configs (`dashboard/hosts.toml`, `agent/engines.toml`).
 - `docs/` — Architecture notes and design context.
@@ -14,17 +14,17 @@
 ## Build, Test, and Development Commands
 - `cargo build` — Build the Rust workspace.
 - `cargo run -p aiman_agent` — Run the agent API locally.
-- `npm --prefix dashboard install` — Install dashboard dependencies.
-- `npm --prefix dashboard run dev` — Run the Vite UI dev server.
+- `cargo run -p aiman_dashboard` — Run the dashboard backend locally.
+- `npm --prefix dashboard install` — Install dashboard UI dependencies.
+- `npm --prefix dashboard run dev` — Run the Vite UI dev server (hot reload).
 - `npm --prefix dashboard run build` — Build the production UI assets.
-- `npm --prefix dashboard run serve` — Run the dashboard Fastify server.
-- For local dev, copy the seeds into `config/` if you want to use the dev shell defaults, or update the dev shell env vars in `flake.nix` (uses `./config/agent/engines.toml` and `../config/dashboard/hosts.toml` by default).
+- For local dev, copy the seeds into `config/` if you want to use the dev shell defaults, or update the dev shell env vars in `flake.nix`.
 
 ## Coding Style & Naming Conventions
 - Rust: follow `rustfmt` defaults; use `snake_case` for functions and `CamelCase` for types.
-- TypeScript/Vue: keep components in `PascalCase` filenames and use `camelCase` for functions.
+- Vue: keep components in `PascalCase` filenames and use `camelCase` for functions.
 - Keep modules small and purpose‑driven; prefer clear names over abbreviations.
-- Keep shared schema changes in sync across `crates/shared`, `dashboard/src/server`, and `dashboard/src/ui`.
+- Keep shared schema changes in sync across `crates/shared` and `dashboard/src/ui`.
 
 ## Documentation & Comments
 - Add detailed, intentional comments for non-obvious logic and design decisions.
@@ -33,7 +33,7 @@
 
 ## Testing Guidelines
 - No automated tests are set up yet. If you add tests, keep them close to the module they cover.
-- Suggested future conventions: `*_test.rs` for Rust and `*.spec.ts` for UI/server tests.
+- Suggested future conventions: `*_test.rs` for Rust and `*.spec.ts` for UI tests.
 
 ## Commit & Pull Request Guidelines
 - History is minimal; no strict commit convention exists yet.

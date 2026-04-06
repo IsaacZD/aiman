@@ -1,39 +1,17 @@
+//! Hardware collection utilities for the agent.
+//!
+//! Uses the shared `HardwareInfo` and `GpuInfo` types and provides
+//! platform-specific collection logic.
+
 use std::pin::Pin;
 use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
+
+use process_wrap::tokio::*;
 use sysinfo::System;
 use tokio::time::timeout;
-use process_wrap::tokio::*;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct HardwareInfo {
-    pub hostname: Option<String>,
-    pub os_name: Option<String>,
-    pub os_version: Option<String>,
-    pub kernel_version: Option<String>,
-    pub cpu_brand: Option<String>,
-    pub cpu_cores_logical: usize,
-    pub cpu_cores_physical: Option<usize>,
-    pub cpu_frequency_mhz: Option<u64>,
-    pub memory_total_kb: u64,
-    pub memory_available_kb: u64,
-    pub swap_total_kb: u64,
-    pub swap_free_kb: u64,
-    pub uptime_seconds: u64,
-    pub gpus: Vec<GpuInfo>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct GpuInfo {
-    pub name: Option<String>,
-    pub vendor: Option<String>,
-    pub memory_total_mb: Option<u64>,
-    pub memory_used_mb: Option<u64>,
-    pub driver_version: Option<String>,
-    pub utilization_percent: Option<u32>,
-    pub temperature_celsius: Option<u32>,
-    pub power_usage_watts: Option<f64>,
-}
+// Re-export types from shared for backwards compatibility
+pub use aiman_shared::{GpuInfo, HardwareInfo};
 
 #[derive(Debug)]
 pub struct HardwareCache {

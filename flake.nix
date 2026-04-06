@@ -11,7 +11,8 @@
       overlays = {
         default = final: prev: {
           aiman_agent = final.callPackage ./nix/aiman_agent.nix { };
-          aiman-dashboard = final.callPackage ./nix/aiman-dashboard.nix { };
+          aiman_dashboard = final.callPackage ./nix/aiman_dashboard.nix { };
+          aiman-dashboard-ui = final.callPackage ./nix/aiman-dashboard-ui.nix { };
         };
       };
     in
@@ -22,7 +23,8 @@
       {
         packages = {
           aiman_agent = pkgs.aiman_agent;
-          aiman-dashboard = pkgs.aiman-dashboard;
+          aiman_dashboard = pkgs.aiman_dashboard;
+          aiman-dashboard-ui = pkgs.aiman-dashboard-ui;
           default = pkgs.aiman_agent;
         };
 
@@ -53,7 +55,8 @@
           # AIMAN_API_KEY = "";
 
           # dashboard
-          AIMAN_HOSTS_CONFIG = "../config/dashboard/hosts.toml"; # need .. because the work dir is dashboard
+          AIMAN_HOSTS_CONFIG = "./config/dashboard/hosts.toml";
+          AIMAN_DASHBOARD_UI_DIR = "./dashboard/dist/ui";
         };
 
         apps = {
@@ -66,14 +69,14 @@
               '';
             };
           };
-          aiman-dashboard = flake-utils.lib.mkApp {
+          aiman_dashboard = flake-utils.lib.mkApp {
             drv = pkgs.writeShellApplication {
-              name = "aiman-dashboard";
-              runtimeInputs = with pkgs; [ nodejs_20 ];
+              name = "aiman_dashboard";
+              runtimeInputs = with pkgs; [ cargo nodejs_20 ];
               text = ''
                 npm --prefix dashboard install
                 npm --prefix dashboard run build
-                npm --prefix dashboard run serve
+                cargo run -p aiman_dashboard "$@"
               '';
             };
           };

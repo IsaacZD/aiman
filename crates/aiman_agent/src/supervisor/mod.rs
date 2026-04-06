@@ -384,7 +384,8 @@ impl Supervisor {
     }
 
     pub async fn append_benchmark<T: Serialize>(&self, record: &T) {
-        self.benchmark_writer.append(record).await;
+        // Ignore errors - LogWriter logs internally on failure
+        let _ = self.benchmark_writer.append(record).await;
     }
 }
 
@@ -449,13 +450,14 @@ async fn persist_config_store(path: &PathBuf, configs: &HashMap<String, EngineCo
     values.sort_by(|a, b| a.id.cmp(&b.id));
     if let Ok(serialized) = serde_json::to_string_pretty(&values) {
         let path = path.clone();
-        if let Err(err) = tokio::task::spawn_blocking(move || {
+        match tokio::task::spawn_blocking(move || {
             store::atomic_write_json(&path, serialized.as_bytes())
         })
         .await
-        .unwrap_or_else(|err| Err(anyhow::anyhow!("{err}")))
         {
-            tracing::error!(error = %err, "failed to persist config store");
+            Err(err) => tracing::error!(error = %err, "failed to persist config store"),
+            Ok(Err(err)) => tracing::error!(error = %err, "failed to persist config store"),
+            Ok(Ok(())) => {}
         }
     }
 }
@@ -465,13 +467,14 @@ async fn persist_image_store(path: &PathBuf, images: &HashMap<String, ContainerI
     values.sort_by(|a, b| a.id.cmp(&b.id));
     if let Ok(serialized) = serde_json::to_string_pretty(&values) {
         let path = path.clone();
-        if let Err(err) = tokio::task::spawn_blocking(move || {
+        match tokio::task::spawn_blocking(move || {
             store::atomic_write_json(&path, serialized.as_bytes())
         })
         .await
-        .unwrap_or_else(|err| Err(anyhow::anyhow!("{err}")))
         {
-            tracing::error!(error = %err, "failed to persist image store");
+            Err(err) => tracing::error!(error = %err, "failed to persist image store"),
+            Ok(Err(err)) => tracing::error!(error = %err, "failed to persist image store"),
+            Ok(Ok(())) => {}
         }
     }
 }

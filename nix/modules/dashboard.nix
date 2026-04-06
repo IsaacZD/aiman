@@ -10,22 +10,32 @@
     "AIMAN_DASHBOARD_BIND=${cfg.bind}"
     "AIMAN_DASHBOARD_PORT=${toString cfg.port}"
     "AIMAN_HOSTS_STORE=${cfg.hostsStore}"
+    "AIMAN_DASHBOARD_UI_DIR=${cfg.uiPackage}/share/aiman-dashboard-ui/ui"
   ];
   seedEnv = lib.optional (cfg.hostsConfig != null) "AIMAN_HOSTS_CONFIG=${cfg.hostsConfig}";
-  fullEnv = baseEnv ++ seedEnv ++ envList;
+  benchmarksEnv = lib.optional (cfg.benchmarksPath != null) "AIMAN_DASHBOARD_BENCHMARKS=${cfg.benchmarksPath}";
+  fullEnv = baseEnv ++ seedEnv ++ benchmarksEnv ++ envList;
   openFirewall = cfg.openFirewall;
   isDefaultStore = cfg.hostsStore == "/var/lib/aiman/dashboard/hosts.json";
+  isDefaultBenchmarks = cfg.benchmarksPath == "/var/lib/aiman/dashboard/benchmarks.jsonl";
   tmpRules =
     (lib.optional isDefaultStore "d /var/lib/aiman/dashboard 0750 ${cfg.user} ${cfg.group} -")
-    ++ (lib.optional isDefaultStore "f ${cfg.hostsStore} 0640 ${cfg.user} ${cfg.group} -");
+    ++ (lib.optional isDefaultStore "f ${cfg.hostsStore} 0640 ${cfg.user} ${cfg.group} -")
+    ++ (lib.optional isDefaultBenchmarks "f ${cfg.benchmarksPath} 0640 ${cfg.user} ${cfg.group} -");
 in {
   options.services.aiman-dashboard = {
     enable = lib.mkEnableOption "aiman dashboard server";
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.aiman-dashboard;
-      description = "aiman dashboard package.";
+      default = pkgs.aiman_dashboard;
+      description = "aiman dashboard backend package.";
+    };
+
+    uiPackage = lib.mkOption {
+      type = lib.types.package;
+      default = pkgs.aiman-dashboard-ui;
+      description = "aiman dashboard UI package.";
     };
 
     user = lib.mkOption {
@@ -64,6 +74,12 @@ in {
       description = "Optional hosts.toml seed file path.";
     };
 
+    benchmarksPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "/var/lib/aiman/dashboard/benchmarks.jsonl";
+      description = "Path to store benchmark results.";
+    };
+
     environment = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = {};
@@ -98,7 +114,7 @@ in {
         Type = "simple";
         User = cfg.user;
         Group = cfg.group;
-        ExecStart = "${cfg.package}/bin/aiman-dashboard";
+        ExecStart = "${cfg.package}/bin/aiman_dashboard";
         Environment = fullEnv;
         Restart = "on-failure";
         RestartSec = 2;

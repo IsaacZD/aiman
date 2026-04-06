@@ -2,7 +2,7 @@
 
 WARNING: This is a vibe coding project that mainly serves my personal needs. If it fits your needs feel free to give it a shot, but I may not be able to provide much support.
 
-Local‑first LLM engine manager with a Rust agent and a Vue dashboard. The agent runs on LLM servers to start/stop engines and stream logs; the dashboard runs on a NAS to control multiple hosts over LAN.
+Local‑first LLM engine manager with Rust backends and a Vue dashboard. The agent runs on LLM servers to start/stop engines and stream logs; the dashboard runs on a NAS to control multiple hosts over LAN.
 
 ## Features
 - Start/stop engines (vLLM, llama.cpp, ktransformers, etc.) per config.
@@ -14,8 +14,9 @@ Local‑first LLM engine manager with a Rust agent and a Vue dashboard. The agen
 
 ## Repository Layout
 - `crates/aiman_agent/` — Rust agent binary (process supervisor + API).
-- `crates/shared/` — Shared Rust types.
-- `dashboard/` — Vue UI + Fastify server.
+- `crates/aiman_dashboard/` — Rust dashboard backend (proxies to agents, serves UI).
+- `crates/shared/` — Shared Rust types and utilities (hardware info, storage, HTTP client).
+- `dashboard/` — Vue UI (Vite build, served by dashboard backend).
 - `configs-example/` — Sample seed configs (`agent/engines.toml`, `dashboard/hosts.toml`).
 - `docs/` — Architecture notes.
 - `nix/` — Nix packaging + NixOS modules.
@@ -40,9 +41,14 @@ The agent keeps configs in `AIMAN_CONFIG_STORE` and the dashboard can add/update
 
 ## Quickstart (Dashboard)
 ```bash
+# Build the Vue UI
 npm --prefix dashboard install
 npm --prefix dashboard run build
-npm --prefix dashboard run serve
+
+# Run the Rust dashboard backend
+export AIMAN_DASHBOARD_PORT="4020"
+export AIMAN_DASHBOARD_BIND="0.0.0.0"
+cargo run -p aiman_dashboard
 ```
 
 Open the UI at `http://<NAS_IP>:4020` and add hosts from the Hosts panel. If you want to seed hosts on first launch, set `AIMAN_HOSTS_CONFIG` to a `hosts.toml` path (for example `configs-example/dashboard/hosts.toml`).
@@ -50,14 +56,15 @@ Open the UI at `http://<NAS_IP>:4020` and add hosts from the Hosts panel. If you
 ## Development
 - Build Rust workspace: `cargo build`
 - Run agent: `cargo run -p aiman_agent`
-- Run UI dev server: `npm --prefix dashboard run dev`
+- Run dashboard backend: `cargo run -p aiman_dashboard`
+- Run UI dev server (hot reload): `npm --prefix dashboard run dev`
 
 For development, you can copy seed configs into `config/` (the dev shell paths in `flake.nix`):
 ```bash
 cp -n configs-example/agent/engines.toml config/agent/engines.toml
 cp -n configs-example/dashboard/hosts.toml config/dashboard/hosts.toml
 ```
-The dev shell in `flake.nix` points `AIMAN_ENGINES_CONFIG` at `./config/agent/engines.toml` and `AIMAN_HOSTS_CONFIG` at `../config/dashboard/hosts.toml` (expected when running the dashboard from `dashboard/` or via `npm --prefix dashboard ...`). Update those env vars if you want different paths or run from the repo root.
+The dev shell in `flake.nix` points `AIMAN_ENGINES_CONFIG` at `./config/agent/engines.toml` and `AIMAN_HOSTS_CONFIG` at `./config/dashboard/hosts.toml`. Update those env vars if you want different paths.
 
 ## Notes
 - Agent API uses Axum 0.8 route params: `/v1/engines/{id}`.
@@ -83,9 +90,10 @@ This provides Rust and Node.js.
 
 ### Packages
 - `packages.aiman_agent` builds the agent binary.
-- `packages.aiman-dashboard` builds the dashboard server + UI (uses `buildNpmPackage`).
+- `packages.aiman_dashboard` builds the dashboard backend binary.
+- `packages.aiman-dashboard-ui` builds the Vue UI (uses `buildNpmPackage`).
 
-If the dashboard build fails due to `npmDepsHash`, replace the placeholder hash in `nix/aiman-dashboard.nix` with the value printed by Nix.
+If the UI build fails due to `npmDepsHash`, replace the placeholder hash in `nix/aiman-dashboard-ui.nix` with the value printed by Nix.
 
 ### NixOS Modules
 Enable the services and overlay in your system config:
