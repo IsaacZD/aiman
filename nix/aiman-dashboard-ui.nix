@@ -1,6 +1,6 @@
-{ lib, stdenv, bun }:
+{ lib, buildNpmPackage }:
 
-stdenv.mkDerivation {
+buildNpmPackage {
   pname = "aiman-dashboard-ui";
   version = "0.1.0";
 
@@ -15,15 +15,9 @@ stdenv.mkDerivation {
       && base != "dist";
   };
 
-  nativeBuildInputs = [ bun ];
-
-  buildPhase = ''
-    runHook preBuild
-    export HOME=$TMPDIR
-    bun install --frozen-lockfile
-    bun run build
-    runHook postBuild
-  '';
+  npmBuildScript = "build";
+  npmInstallFlags = [ "--include=dev" ];
+  npmDepsHash = "sha256-HVHhd1+9YgCwbSfhWdYJOlujrPSFWYOQMkp2WD6wpKE=";
 
   installPhase = ''
     runHook preInstall

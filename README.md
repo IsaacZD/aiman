@@ -42,8 +42,8 @@ The agent keeps configs in `AIMAN_CONFIG_STORE` and the dashboard can add/update
 ## Quickstart (Dashboard)
 ```bash
 # Build the Vue UI
-bun --cwd dashboard install
-bun --cwd dashboard run build
+npm --prefix dashboard install
+npm --prefix dashboard run build
 
 # Run the Rust dashboard backend
 export AIMAN_DASHBOARD_PORT="4020"
@@ -57,7 +57,7 @@ Open the UI at `http://<NAS_IP>:4020` and add hosts from the Hosts panel. If you
 - Build Rust workspace: `cargo build`
 - Run agent: `cargo run -p aiman_agent`
 - Run dashboard backend: `cargo run -p aiman_dashboard`
-- Run UI dev server (hot reload): `bun --cwd dashboard run dev`
+- Run UI dev server (hot reload): `npm --prefix dashboard run dev`
 
 For development, you can copy seed configs into `config/` (the dev shell paths in `flake.nix`):
 ```bash
@@ -76,7 +76,7 @@ The dev shell in `flake.nix` points `AIMAN_ENGINES_CONFIG` at `./config/agent/en
 
 ## Nix
 ### Dev shell workflow
-The dev shell provides Rust + Bun and preconfigures local env vars for agent + dashboard development.
+The dev shell provides Rust + Node.js and preconfigures local env vars for agent + dashboard development.
 ```bash
 nix develop
 ```
@@ -86,12 +86,14 @@ cp -n configs-example/agent/engines.toml config/agent/engines.toml
 cp -n configs-example/dashboard/hosts.toml config/dashboard/hosts.toml
 ```
 
-This provides Rust and Bun.
+This provides Rust and Node.js.
 
 ### Packages
 - `packages.aiman_agent` builds the agent binary.
 - `packages.aiman_dashboard` builds the dashboard backend binary.
-- `packages.aiman-dashboard-ui` builds the Vue UI (uses Bun via `stdenv.mkDerivation`).
+- `packages.aiman-dashboard-ui` builds the Vue UI (uses `buildNpmPackage`).
+
+If the UI build fails due to `npmDepsHash`, replace the placeholder hash in `nix/aiman-dashboard-ui.nix` with the value printed by Nix.
 
 ### NixOS Modules
 Enable the services and overlay in your system config:
