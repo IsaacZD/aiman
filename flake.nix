@@ -30,7 +30,6 @@
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
-            node2nix
             just
             rustc
             cargo
@@ -38,7 +37,7 @@
             clippy
             pkg-config
             openssl
-            nodejs_20
+            bun
           ];
 
           RUST_BACKTRACE = "1";
@@ -72,10 +71,10 @@
           aiman_dashboard = flake-utils.lib.mkApp {
             drv = pkgs.writeShellApplication {
               name = "aiman_dashboard";
-              runtimeInputs = with pkgs; [ cargo nodejs_20 ];
+              runtimeInputs = with pkgs; [ cargo bun ];
               text = ''
-                npm --prefix dashboard install
-                npm --prefix dashboard run build
+                bun --cwd dashboard install
+                bun --cwd dashboard run build
                 cargo run -p aiman_dashboard "$@"
               '';
             };

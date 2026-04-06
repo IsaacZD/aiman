@@ -4,7 +4,7 @@ agent:
 
 # Build the Vue UI
 build-ui:
-  npm --prefix dashboard run build
+  bun --cwd dashboard run build
 
 # Run the dashboard backend (builds UI first)
 dashboard: build-ui
@@ -16,7 +16,7 @@ dashboard-only:
 
 # Run the Vite dev server for UI hot reload
 ui-dev:
-  npm --prefix dashboard run dev
+  bun --cwd dashboard run dev
 
 # Build both Rust binaries
 build:
@@ -35,6 +35,6 @@ clean:
   cargo clean
   rm -rf dashboard/dist
 
-# Clean everything including node_modules
+# Clean everything including node_modules and bun.lockb
 clean-all: clean
-  rm -rf dashboard/node_modules
+  rm -rf dashboard/node_modules dashboard/bun.lockb
