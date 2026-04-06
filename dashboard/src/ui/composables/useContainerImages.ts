@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import type { ContainerImage, EnvVar } from "../types";
+import type { ContainerImage } from "../types";
 import { createContainerImageForm } from "../engine-args/container";
 import { buildEnvEntries, cleanStringList } from "./useConfigs";
 

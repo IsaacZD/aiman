@@ -23,8 +23,9 @@ export function parseFastllmArgs(args: string[]): FastllmArgsForm {
 
   // The model path/name is positional (first non-flag argument).
   let modelPath = "";
-  if (rest.length && !rest[0].startsWith("-")) {
-    modelPath = rest[0];
+  const firstArg = rest[0];
+  if (firstArg !== undefined && !firstArg.startsWith("-")) {
+    modelPath = firstArg;
     rest = rest.slice(1);
   }
 

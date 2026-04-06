@@ -9,7 +9,6 @@ export function useLogs() {
   const selectedSessionId = ref<string | null>(null);
 
   let ws: ReconnectingWebSocket | null = null;
-  let wsUserClosed = false;
   let historyLoadTimer: number | null = null;
   let historyRequestId = 0;
   let activeAbortController: AbortController | null = null;
@@ -27,11 +26,9 @@ export function useLogs() {
 
   function connectLogs(engine: EngineItem) {
     if (ws) {
-      wsUserClosed = true;
       ws.close();
     }
 
-    wsUserClosed = false;
     logs.value = [];
     const { host, instance } = engine;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -43,7 +40,7 @@ export function useLogs() {
 
     ws.onmessage = (event) => {
       try {
-        const entry = JSON.parse(event.data as string);
+        const entry = JSON.parse(event.data as string) as { ts: string; stream: string; line: string };
         logs.value.push(`[${entry.ts}] ${entry.stream}: ${entry.line}`);
         if (logs.value.length > 500) {
           logs.value.shift();
@@ -56,7 +53,6 @@ export function useLogs() {
 
   function disconnectLogs() {
     if (ws) {
-      wsUserClosed = true;
       ws.close();
       ws = null;
     }
@@ -81,13 +77,11 @@ export function useLogs() {
   }
 
   function deferUiUpdate(task: () => void) {
-    const idle = (globalThis as any).requestIdleCallback as
-      | ((cb: () => void, options?: { timeout: number }) => number)
-      | undefined;
-    if (idle) {
-      idle(() => task(), { timeout: 200 });
+    const win = window as Window & { requestIdleCallback?: (cb: IdleRequestCallback, options?: IdleRequestOptions) => number };
+    if (win.requestIdleCallback) {
+      win.requestIdleCallback(() => task(), { timeout: 200 });
     } else {
-      window.setTimeout(task, 0);
+      setTimeout(task, 0);
     }
   }
 

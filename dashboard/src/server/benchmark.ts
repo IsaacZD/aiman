@@ -72,32 +72,32 @@ export async function runDashboardBenchmark(
   }
 
   const apiBaseUrl =
-    typeof payload.api_base_url === "string" && payload.api_base_url.trim()
-      ? normalizeBaseUrl(payload.api_base_url)
+    typeof payload["api_base_url"] === "string" && payload["api_base_url"].trim()
+      ? normalizeBaseUrl(payload["api_base_url"])
       : inferApiBase(config, host, image ?? undefined);
   if (!apiBaseUrl) {
     throw new Error("unable to infer engine API base URL");
   }
 
   const apiKey =
-    typeof payload.api_key === "string" && payload.api_key.trim()
-      ? payload.api_key.trim()
+    typeof payload["api_key"] === "string" && payload["api_key"].trim()
+      ? payload["api_key"].trim()
       : undefined;
 
   const model =
-    typeof payload.model === "string" && payload.model.trim()
-      ? payload.model.trim()
+    typeof payload["model"] === "string" && payload["model"].trim()
+      ? payload["model"].trim()
       : await fetchDefaultModel(apiBaseUrl, apiKey);
 
-  const pp = parseNumberList(payload.pp, [512, 2048]);
-  const tg = parseNumberList(payload.tg, [32, 128]);
-  const depth = parseNumberList(payload.depth, [0]);
-  const runs = Math.max(1, Number(payload.runs) || 3);
-  const concurrency = parseNumberList(payload.concurrency, [1]);
-  const prefixCaching = Boolean(payload.prefix_caching);
+  const pp = parseNumberList(payload["pp"], [512, 2048]);
+  const tg = parseNumberList(payload["tg"], [32, 128]);
+  const depth = parseNumberList(payload["depth"], [0]);
+  const runs = Math.max(1, Number(payload["runs"]) || 3);
+  const concurrency = parseNumberList(payload["concurrency"], [1]);
+  const prefixCaching = Boolean(payload["prefix_caching"]);
   const latencyMode =
-    typeof payload.latency_mode === "string" ? payload.latency_mode : "generation";
-  const noWarmup = Boolean(payload.no_warmup);
+    typeof payload["latency_mode"] === "string" ? payload["latency_mode"] : "generation";
+  const noWarmup = Boolean(payload["no_warmup"]);
 
   const args: string[] = [
     "--base-url",
@@ -151,14 +151,14 @@ function runSubprocess(cmd: string, args: string[], timeoutMs = 600_000): Promis
     try {
       proc = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
     } catch (err) {
-      reject(err);
+      reject(err instanceof Error ? err : new Error(String(err)));
       return;
     }
 
     const stdout: string[] = [];
     const stderr: string[] = [];
-    proc.stdout.on("data", (chunk: Buffer) => stdout.push(chunk.toString()));
-    proc.stderr.on("data", (chunk: Buffer) => stderr.push(chunk.toString()));
+    proc.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk.toString()));
+    proc.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk.toString()));
 
     const timer = setTimeout(() => {
       proc.kill("SIGTERM");
@@ -188,7 +188,7 @@ function runSubprocess(cmd: string, args: string[], timeoutMs = 600_000): Promis
 
 async function fetchConfig(host: HostConfig, engineId: string): Promise<EngineConfig> {
   const res = await fetch(`${host.base_url}/v1/configs`, {
-    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
+    ...(host.api_key && { headers: { Authorization: `Bearer ${host.api_key}` } })
   });
   if (!res.ok) {
     throw new Error(`failed to load configs (HTTP ${res.status})`);
@@ -203,7 +203,7 @@ async function fetchConfig(host: HostConfig, engineId: string): Promise<EngineCo
 
 async function fetchImage(host: HostConfig, imageId: string): Promise<ContainerImage | null> {
   const res = await fetch(`${host.base_url}/v1/images/${encodeURIComponent(imageId)}`, {
-    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
+    ...(host.api_key && { headers: { Authorization: `Bearer ${host.api_key}` } })
   });
   if (!res.ok) {
     return null;
@@ -214,7 +214,7 @@ async function fetchImage(host: HostConfig, imageId: string): Promise<ContainerI
 
 async function fetchInstance(host: HostConfig, engineId: string): Promise<EngineInstance> {
   const res = await fetch(`${host.base_url}/v1/engines/${engineId}`, {
-    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
+    ...(host.api_key && { headers: { Authorization: `Bearer ${host.api_key}` } })
   });
   if (!res.ok) {
     throw new Error(`failed to load engine (HTTP ${res.status})`);
@@ -225,7 +225,7 @@ async function fetchInstance(host: HostConfig, engineId: string): Promise<Engine
 
 async function fetchHardware(host: HostConfig): Promise<HardwareInfo | null> {
   const res = await fetch(`${host.base_url}/v1/hardware`, {
-    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
+    ...(host.api_key && { headers: { Authorization: `Bearer ${host.api_key}` } })
   });
   if (!res.ok) {
     return null;
@@ -236,7 +236,7 @@ async function fetchHardware(host: HostConfig): Promise<HardwareInfo | null> {
 
 async function fetchDefaultModel(apiBaseUrl: string, apiKey?: string): Promise<string> {
   const res = await fetch(`${apiBaseUrl}/v1/models`, {
-    headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined
+    ...(apiKey && { headers: { Authorization: `Bearer ${apiKey}` } })
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -294,6 +294,7 @@ function inferApiBase(config: EngineConfig, host: HostConfig, image?: ContainerI
 function parseArgValue(args: string[], key: string) {
   for (let i = 0; i < args.length; i++) {
     const v = args[i];
+    if (v === undefined) continue;
     if (v === key) return args[i + 1];
     if (v.startsWith(`${key}=`)) return v.slice(key.length + 1);
   }

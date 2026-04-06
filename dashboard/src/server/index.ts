@@ -2,8 +2,9 @@ import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import websocketPlugin from "@fastify/websocket";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import WebSocket from "ws";
+import WebSocket, { type WebSocket as WebSocketType } from "ws";
 
 import { initHostPaths, loadHosts, findHost, persistHosts, validateHost } from "./hosts";
 import { proxyRequest, buildQueryString } from "./proxy";
@@ -19,11 +20,11 @@ import type { HostConfig } from "./types";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../../..");
-const configPath = process.env.AIMAN_HOSTS_CONFIG ?? path.join(repoRoot, "configs", "hosts.toml");
+const configPath = process.env["AIMAN_HOSTS_CONFIG"] ?? path.join(repoRoot, "configs", "hosts.toml");
 const hostsStorePath =
-  process.env.AIMAN_HOSTS_STORE ?? path.join(repoRoot, "data", "hosts.json");
+  process.env["AIMAN_HOSTS_STORE"] ?? path.join(repoRoot, "data", "hosts.json");
 const dashboardBenchmarksPath =
-  process.env.AIMAN_DASHBOARD_BENCHMARKS ??
+  process.env["AIMAN_DASHBOARD_BENCHMARKS"] ??
   path.join(repoRoot, "data", "benchmarks-dashboard.jsonl");
 const uiDir = path.resolve(__dirname, "../../dist/ui");
 
@@ -137,7 +138,7 @@ server.get("/api/engines", async () => {
     hosts.map(async (host) => {
       try {
         const res = await fetch(`${host.base_url}/v1/engines`, {
-          headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
+          ...(host.api_key && { headers: { Authorization: `Bearer ${host.api_key}` } })
         });
         if (!res.ok) {
           return { host, error: `HTTP ${res.status}` };
@@ -339,9 +340,9 @@ server.get("/api/hosts/:hostId/engines/:engineId/logs", async (request, reply) =
   const qs = buildQueryString(query);
   const url = `${host.base_url}/v1/engines/${engineId}/logs${qs}`;
   const res = await fetch(url, {
-    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
+    ...(host.api_key && { headers: { Authorization: `Bearer ${host.api_key}` } })
   });
-  const body = await res.json().catch(() => null);
+  const body = (await res.json().catch(() => null)) as unknown;
   return reply.code(res.status).send(body ?? { ok: res.ok });
 });
 
@@ -357,9 +358,9 @@ server.get("/api/hosts/:hostId/engines/:engineId/logs/sessions", async (request,
   const qs = buildQueryString(query);
   const url = `${host.base_url}/v1/engines/${engineId}/logs/sessions${qs}`;
   const res = await fetch(url, {
-    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
+    ...(host.api_key && { headers: { Authorization: `Bearer ${host.api_key}` } })
   });
-  const body = await res.json().catch(() => null);
+  const body = (await res.json().catch(() => null)) as unknown;
   return reply.code(res.status).send(body ?? { ok: res.ok });
 });
 
@@ -375,9 +376,9 @@ server.get("/api/hosts/:hostId/engines/:engineId/status", async (request, reply)
   const qs = buildQueryString(query);
   const url = `${host.base_url}/v1/engines/${engineId}/status${qs}`;
   const res = await fetch(url, {
-    headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
+    ...(host.api_key && { headers: { Authorization: `Bearer ${host.api_key}` } })
   });
-  const body = await res.json().catch(() => null);
+  const body = (await res.json().catch(() => null)) as unknown;
   return reply.code(res.status).send(body ?? { ok: res.ok });
 });
 
@@ -389,7 +390,7 @@ server.get("/api/benchmarks", async () => {
     hosts.map(async (host) => {
       try {
         const res = await fetch(`${host.base_url}/v1/benchmarks`, {
-          headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
+          ...(host.api_key && { headers: { Authorization: `Bearer ${host.api_key}` } })
         });
         if (!res.ok) {
           return { host, error: `HTTP ${res.status}` };
@@ -439,55 +440,83 @@ server.get("/api/hosts/:hostId/events", async (request, reply) => {
   reply.raw.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
-    Connection: "keep-alive"
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no" // Disable nginx buffering if behind a proxy
   });
 
-  try {
-    // Node.js 18+ ReadableStream is AsyncIterable; cast via unknown for TS compatibility.
-    for await (const chunk of agentRes.body as unknown as AsyncIterable<Uint8Array>) {
-      if (!reply.raw.writable) break;
-      reply.raw.write(chunk);
-    }
-  } catch {
-    // upstream closed or client disconnected
-  } finally {
-    if (reply.raw.writable) {
-      reply.raw.end();
-    }
-  }
+  // Disable Nagle's algorithm to ensure SSE chunks are sent immediately.
+  reply.raw.socket?.setNoDelay(true);
+
+  // Convert Web ReadableStream to Node.js Readable and pipe directly for real-time SSE.
+  const nodeStream = Readable.fromWeb(agentRes.body as import("stream/web").ReadableStream);
+  nodeStream.pipe(reply.raw, { end: true });
+
+  // Handle client disconnect by destroying the upstream stream.
+  reply.raw.on("close", () => {
+    nodeStream.destroy();
+  });
 });
 
 // Bridge WS log stream from host -> browser.
+// @fastify/websocket v11+: handler receives (socket, request) where socket is WebSocket directly.
 server.get(
   "/api/hosts/:hostId/engines/:engineId/logs/ws",
   { websocket: true },
-  async (connection, request) => {
-    const { hostId, engineId } = request.params as { hostId: string; engineId: string };
-    const host = await findHost(hostId);
-    if (!host) {
-      connection.socket.close();
+  (socket: WebSocketType, request) => {
+    const rawUrl = request?.raw?.url ?? "";
+    const urlMatch = rawUrl.match(/\/api\/hosts\/([^/]+)\/engines\/([^/]+)\/logs\/ws/);
+    const hostId = urlMatch?.[1] ? decodeURIComponent(urlMatch[1]) : undefined;
+    const engineId = urlMatch?.[2] ? decodeURIComponent(urlMatch[2]) : undefined;
+    server.log.info({ hostId, engineId, rawUrl }, "websocket connection received");
+
+    if (!hostId || !engineId) {
+      socket.close(1008, "invalid params");
       return;
     }
 
-    const targetUrl = `${host.base_url.replace(/\/$/, "")}/v1/engines/${engineId}/logs/ws`;
-    const upstream = new WebSocket(targetUrl, {
-      headers: host.api_key ? { Authorization: `Bearer ${host.api_key}` } : undefined
-    });
-
-    upstream.on("message", (data) => {
-      if (connection.socket.readyState === WebSocket.OPEN) {
-        connection.socket.send(data.toString());
+    void findHost(hostId).then((host) => {
+      if (!host) {
+        socket.close(1008, "unknown host");
+        return;
       }
-    });
 
-    upstream.on("close", () => {
-      if (connection.socket.readyState === WebSocket.OPEN) {
-        connection.socket.close();
-      }
-    });
+      const targetUrl = host.base_url.replace(/^http/, "ws").replace(/\/$/, "") +
+        `/v1/engines/${engineId}/logs/ws`;
+      server.log.info({ targetUrl, engineId }, "opening upstream websocket");
 
-    connection.socket.on("close", () => {
-      upstream.close();
+      const upstream = new WebSocket(targetUrl, {
+        ...(host.api_key && { headers: { Authorization: `Bearer ${host.api_key}` } })
+      });
+
+      upstream.on("open", () => {
+        server.log.info({ targetUrl }, "upstream websocket connected");
+      });
+
+      upstream.on("error", (err: Error) => {
+        server.log.error({ err: err.message, targetUrl }, "upstream websocket error");
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.close(1011, "upstream error");
+        }
+      });
+
+      upstream.on("message", (data: WebSocket.Data) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          // Pass data directly - socket.send accepts Buffer/string/ArrayBuffer
+          socket.send(data);
+        }
+      });
+
+      upstream.on("close", () => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.close();
+        }
+      });
+
+      socket.on("close", () => {
+        if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) {
+          upstream.close();
+        }
+      });
     });
   }
 );
@@ -498,8 +527,8 @@ server.register(fastifyStatic, {
   prefix: "/"
 });
 
-const port = Number(process.env.AIMAN_DASHBOARD_PORT ?? "4020");
-const host = process.env.AIMAN_DASHBOARD_BIND ?? "0.0.0.0";
+const port = Number(process.env["AIMAN_DASHBOARD_PORT"] ?? "4020");
+const host = process.env["AIMAN_DASHBOARD_BIND"] ?? "0.0.0.0";
 
 server.listen({ port, host }).catch((err) => {
   server.log.error(err);

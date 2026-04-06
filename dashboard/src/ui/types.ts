@@ -82,7 +82,7 @@ export type EngineInstance = {
 export type EngineItem = {
   host: Host;
   instance: EngineInstance;
-  configName?: string;
+  configName?: string | undefined;
 };
 
 export type EnginesResult = {
@@ -106,7 +106,7 @@ export type LogSession = {
 
 export type ModelArtifact = {
   id: string;
-  kind: "snapshot" | "gguf" | string;
+  kind: string;
   path: string;
   label: string;
   library: string;

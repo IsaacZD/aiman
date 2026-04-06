@@ -111,7 +111,7 @@ export function useBenchmarks() {
         }
       );
       if (!res.ok) {
-        const body = await res.json().catch(() => null);
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
         benchmarkModalError.value = body?.error
           ? `Benchmark failed: ${body.error}`
           : `Benchmark failed (HTTP ${res.status}).`;

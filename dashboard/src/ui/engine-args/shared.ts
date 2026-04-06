@@ -35,7 +35,7 @@ export function splitArgsLine(raw: string) {
       continue;
     }
 
-    if (/\s/.test(char)) {
+    if (char !== undefined && /\s/.test(char)) {
       if (current) {
         tokens.push(current);
         current = "";
@@ -65,6 +65,7 @@ export function consumeFlag(args: string[], flag: string, shortFlag?: string): C
     }
 
     const arg = next[index];
+    if (arg === undefined) continue;
     if (arg.startsWith(eqPrefix)) {
       next.splice(index, 1);
       return { value: arg.slice(eqPrefix.length), rest: next };

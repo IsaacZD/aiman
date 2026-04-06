@@ -1,5 +1,5 @@
 import { ref, computed } from "vue";
-import type { Host, EngineItem, EnginesResult, HardwareInfo, EngineConfig } from "../types";
+import type { Host, EngineItem, EnginesResult, EngineConfig } from "../types";
 
 export function useEngines() {
   const engines = ref<EngineItem[]>([]);

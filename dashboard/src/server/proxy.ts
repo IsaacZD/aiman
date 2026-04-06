@@ -1,9 +1,9 @@
 import type { HostConfig } from "./types";
 
 // Best-effort JSON parsing for proxied responses.
-export async function safeJson(res: Response) {
+export async function safeJson(res: Response): Promise<unknown> {
   try {
-    return await res.json();
+    return (await res.json()) as unknown;
   } catch {
     return null;
   }
@@ -51,8 +51,8 @@ export async function proxyRequest(
 
   const res = await fetch(url, {
     method,
-    headers: Object.keys(headers).length ? headers : undefined,
-    body: body !== undefined ? JSON.stringify(body) : undefined
+    ...(Object.keys(headers).length && { headers }),
+    ...(body !== undefined && { body: JSON.stringify(body) })
   });
 
   const parsed = await safeJson(res);

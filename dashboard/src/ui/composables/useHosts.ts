@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import type { Host, HardwareInfo, EngineConfig, EnginesResult } from "../types";
+import type { Host, HardwareInfo, EnginesResult } from "../types";
 
 export function useHosts() {
   const hosts = ref<Host[]>([]);
@@ -112,7 +112,7 @@ export function useHosts() {
     });
 
     if (!res.ok) {
-      const body = await res.json().catch(() => null);
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
       if (res.status === 409 && !isEdit && payload.id) {
         if (confirm(`Host "${payload.id}" already exists. Edit it instead?`)) {
           const existing = hosts.value.find((host) => host.id === payload.id);
@@ -156,7 +156,7 @@ export function useHosts() {
 
   async function fetchHostsAndHardware(
     hosts_: Host[],
-    getConfigNames: (hostId: string) => Promise<Record<string, string>>
+    _getConfigNames: (hostId: string) => Promise<Record<string, string>>
   ) {
     const nextHardwareByHost: Record<string, HardwareInfo | null> = {};
     const nextHardwareErrors: Record<string, string> = {};

@@ -86,7 +86,7 @@ export function formatGpus(info: HardwareInfo | null | undefined): string {
   if (!gpus.length) {
     return "—";
   }
-  const grouped = new Map<string, { count: number; memoryLabel?: string }>();
+  const grouped = new Map<string, { count: number; memoryLabel?: string | undefined }>();
   for (const gpu of gpus) {
     const name = gpu.name?.trim() || gpu.vendor?.trim() || "GPU";
     const memoryLabel = gpu.memory_total_mb ? formatBytesFromMb(gpu.memory_total_mb) : undefined;

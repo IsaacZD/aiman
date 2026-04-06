@@ -331,8 +331,8 @@ export function useConfigs() {
       return;
     }
 
-    let args: string[] = [];
     // Build args from the template-specific form, keeping unknown flags in extra args.
+    let args: string[];
     if (configForm.value.engine_type === "Vllm" || configForm.value.engine_type === "Lvllm") {
       args = buildVllmArgs(vllmArgsForm.value);
     } else if (
@@ -431,7 +431,7 @@ export function useConfigs() {
       }
 
       const deleteRes = await fetch(
-        `/api/hosts/${configHostId}/configs/${encodeURIComponent(targetId!)}`,
+        `/api/hosts/${configHostId}/configs/${encodeURIComponent(targetId)}`,
         { method: "DELETE" }
       );
 
