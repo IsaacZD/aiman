@@ -68,6 +68,9 @@
               <p class="config-meta config-id">{{ image.id }}</p>
             </div>
             <div class="config-actions">
+              <button class="ghost" @click="$emit('open-image-template-modal', image)">
+                Create from template
+              </button>
               <button class="secondary" @click="$emit('open-image-modal', image)">Edit</button>
             </div>
           </article>
@@ -95,6 +98,7 @@ defineEmits<{
   (e: "open-config-modal", config?: EngineConfig): void;
   (e: "open-config-template-modal", config: EngineConfig): void;
   (e: "open-image-modal", image?: ContainerImage): void;
+  (e: "open-image-template-modal", image: ContainerImage): void;
   (e: "prune-images"): void;
 }>();
 

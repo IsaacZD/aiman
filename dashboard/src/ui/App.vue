@@ -131,6 +131,7 @@
         @open-config-modal="handleOpenConfigModal"
         @open-config-template-modal="handleOpenConfigTemplateModal"
         @open-image-modal="handleOpenImageModal"
+        @open-image-template-modal="handleOpenImageTemplateModal"
         @prune-images="pruneImages(configHostId)"
       />
     </main>
@@ -308,6 +309,7 @@ const {
   imageForm,
   showImageModal,
   openImageModal,
+  openImageTemplateModal,
   closeImageModal,
   loadImages,
   saveImage,
@@ -430,6 +432,10 @@ function onConfigSaved(nextConfigs: EngineConfig[]) {
 
 function handleOpenImageModal(image?: ContainerImage) {
   openImageModal(image, configHostId.value);
+}
+
+function handleOpenImageTemplateModal(image: ContainerImage) {
+  openImageTemplateModal(image, configHostId.value);
 }
 
 // ── refresh all ───────────────────────────────────────────────────────────────

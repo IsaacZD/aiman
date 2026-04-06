@@ -40,6 +40,23 @@ export function useContainerImages() {
     showImageModal.value = true;
   }
 
+  function openImageTemplateModal(image: ContainerImage, configHostId?: string | null) {
+    if (!configHostId) {
+      imageErrors.value = ["Select a host before creating an image."];
+      return false;
+    }
+    imageErrors.value = [];
+    editImage(image);
+    imageMode.value = "create";
+    imageOriginalId.value = null;
+    imageForm.value = {
+      ...imageForm.value,
+      id: generateImageId()
+    };
+    showImageModal.value = true;
+    return true;
+  }
+
   function closeImageModal() {
     showImageModal.value = false;
     imageErrors.value = [];
@@ -254,6 +271,7 @@ export function useContainerImages() {
     showImageModal,
     resetImageForm,
     openImageModal,
+    openImageTemplateModal,
     closeImageModal,
     editImage,
     loadImages,
