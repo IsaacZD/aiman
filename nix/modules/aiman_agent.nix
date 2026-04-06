@@ -35,9 +35,9 @@
   isDefaultDataDir = cfg.dataDir == "/var/lib/aiman/agent";
   isDefaultStore = cfg.configStore == "/var/lib/aiman/agent/configs.json";
   tmpRules =
-    (lib.optional isDefaultDataDir "d ${cfg.dataDir} 0750 ${cfg.user} ${cfg.group} -")
-    ++ (lib.optional isDefaultStore "d /var/lib/aiman/agent 0750 ${cfg.user} ${cfg.group} -")
-    ++ (lib.optional isDefaultStore "f ${cfg.configStore} 0640 ${cfg.user} ${cfg.group} -");
+    (lib.optional isDefaultDataDir "d ${cfg.dataDir} 0750 root root -")
+    ++ (lib.optional isDefaultStore "d /var/lib/aiman/agent 0750 root root -")
+    ++ (lib.optional isDefaultStore "f ${cfg.configStore} 0640 root root -");
 in {
   options.services.aiman_agent = {
     enable = lib.mkEnableOption "aiman agent";
@@ -151,16 +151,8 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
-    users.users = lib.mkIf (cfg.user == "aiman") {
-      aiman = {
-        isSystemUser = true;
-        group = cfg.group;
-      };
-    };
-
-    users.groups = lib.mkIf (cfg.group == "aiman") {
-      aiman = {};
-    };
+    # Service runs as root for rootful podman
+    # User/group options remain for backwards compatibility but are unused
 
     systemd.services.aiman_agent = {
       description = "aiman agent";
@@ -169,13 +161,11 @@ in {
       path = cfg.extraPackages ++ [pkgs.podman];
       serviceConfig = {
         Type = "simple";
-        User = cfg.user;
-        Group = cfg.group;
+        # Run as root for rootful podman (simpler than rootless for system services)
+        User = "root";
+        Group = "root";
         ExecStart = "${cfg.package}/bin/aiman_agent";
-        Environment = fullEnv ++ [
-          # Prepend wrappers for newuidmap/newgidmap (required by rootless podman)
-          "PATH=/run/wrappers/bin:${lib.makeBinPath (cfg.extraPackages ++ [pkgs.podman])}"
-        ];
+        Environment = fullEnv;
         Restart = "on-failure";
         RestartSec = 2;
       };
