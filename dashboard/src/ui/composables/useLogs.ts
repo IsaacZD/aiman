@@ -45,6 +45,21 @@ export function useLogs() {
         if (logs.value.length > 500) {
           logs.value.shift();
         }
+
+        // Also append to log history if viewing the current session
+        if (selectedSessionId.value === currentSessionId.value) {
+          const historyEntry: LogEntry = {
+            ts: entry.ts,
+            session_id: currentSessionId.value ?? '',
+            stream: entry.stream,
+            line: entry.line
+          };
+          logHistory.value.push(historyEntry);
+          // Keep history manageable (same limit as HTTP fetch)
+          if (logHistory.value.length > 1000) {
+            logHistory.value.shift();
+          }
+        }
       } catch {
         logs.value.push(event.data as string);
       }

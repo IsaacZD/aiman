@@ -17,7 +17,12 @@ export function useEvents() {
   function connectHost(host: Host, callbacks: EventCallbacks) {
     const source = new EventSource(`/api/hosts/${host.id}/events`);
 
+    source.onopen = () => {
+      console.log(`[SSE] Connected to host ${host.id}`);
+    };
+
     source.onmessage = (event) => {
+      console.log(`[SSE] Received event from host ${host.id}:`, event.data);
       // Reset backoff on successful message.
       backoffMs.set(host.id, INITIAL_BACKOFF);
       try {
@@ -26,23 +31,28 @@ export function useEvents() {
           instance?: EngineInstance;
           hardware?: HardwareInfo;
         };
+        console.log(`[SSE] Parsed event type: ${data.type}`);
         if (data.type === "engine_status" && data.instance) {
+          console.log(`[SSE] Engine status update:`, data.instance);
           callbacks.onEngineStatus(host.id, data.instance);
         } else if (data.type === "hardware" && data.hardware) {
+          console.log(`[SSE] Hardware update:`, data.hardware);
           callbacks.onHardware(host.id, data.hardware);
         }
-      } catch {
-        // Ignore malformed events.
+      } catch (err) {
+        console.error(`[SSE] Failed to parse event from host ${host.id}:`, err, event.data);
       }
     };
 
-    source.onerror = () => {
+    source.onerror = (err) => {
+      console.error(`[SSE] Connection error for host ${host.id}:`, err);
       // Close to prevent browser's automatic rapid reconnection.
       source.close();
       sources.delete(host.id);
 
       const delay = backoffMs.get(host.id) ?? INITIAL_BACKOFF;
       backoffMs.set(host.id, Math.min(delay * 2, MAX_BACKOFF));
+      console.log(`[SSE] Reconnecting to host ${host.id} in ${delay}ms`);
 
       const timer = window.setTimeout(() => {
         reconnectTimers.delete(host.id);

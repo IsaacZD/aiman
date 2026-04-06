@@ -109,6 +109,7 @@ export function useEngines() {
     engineResultsByHost,
     engineCount,
     enginesByHost,
+    rebuildEnginesByHost,
     updateConfigNameMapForHost,
     startEngine,
     stopEngine,

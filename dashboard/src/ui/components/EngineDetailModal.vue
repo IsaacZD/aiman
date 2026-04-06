@@ -8,12 +8,6 @@
       <p class="panel-sub">
         {{ engine ? `${engine.host.name} • ${engine.instance.id}` : "Pick an engine" }}
       </p>
-      <div class="logs">
-        <p v-if="!engine" class="empty">Select an engine to stream logs.</p>
-        <div v-else class="log-lines">
-          <p v-for="(line, idx) in logs" :key="idx">{{ line }}</p>
-        </div>
-      </div>
       <div class="history">
         <div class="history-controls">
           <label>
@@ -57,7 +51,6 @@ import { formatSessionLabel } from "../utils/format";
 const props = defineProps<{
   show: boolean;
   engine: EngineItem | null;
-  logs: string[];
   logHistory: LogEntry[];
   logSessions: LogSession[];
   selectedSessionId: string | null;

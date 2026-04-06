@@ -103,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/hosts/{hostId}/engines/{engineId}/status", get(api::proxy::proxy_status))
         // Streaming
-        .route("/api/hosts/{hostId}/events", get(api::streaming::sse_bridge))
+        .route("/api/hosts/{host_id}/events", get(api::streaming::sse_bridge))
         .route("/api/hosts/{hostId}/engines/{engineId}/logs/ws", get(api::streaming::ws_bridge))
         // Aggregation
         .route("/api/engines", get(api::aggregation::aggregate_engines))

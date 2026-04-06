@@ -140,7 +140,6 @@
   <EngineDetailModal
     :show="showDetailModal"
     :engine="selected"
-    :logs="logs"
     :log-history="logHistory"
     :log-sessions="logSessions"
     :selected-session-id="selectedSessionId"
@@ -245,6 +244,7 @@ const {
   engineResultsByHost,
   engineCount,
   enginesByHost,
+  rebuildEnginesByHost,
   updateConfigNameMapForHost,
   startEngine,
   stopEngine,
@@ -455,12 +455,19 @@ async function refreshAll() {
     // (Re-)connect SSE streams now that the host list is known.
     connectEvents(hosts.value, {
       onEngineStatus(hostId, instance) {
+        console.log(`[App] onEngineStatus called for host ${hostId}, engine ${instance.id}, status: ${instance.status}`);
         // Patch the engine entry in-place so the UI stays reactive.
         const idx = engines.value.findIndex(
           (e) => e.host.id === hostId && e.instance.id === instance.id
         );
+        console.log(`[App] Found engine at index: ${idx}, total engines: ${engines.value.length}`);
         if (idx !== -1) {
+          console.log(`[App] Updating engine ${instance.id} status from ${engines.value[idx].instance.status} to ${instance.status}`);
           engines.value[idx] = { ...engines.value[idx], instance };
+          rebuildEnginesByHost();
+          console.log(`[App] Engine updated and enginesByHost rebuilt`);
+        } else {
+          console.warn(`[App] Engine ${instance.id} not found in engines array`);
         }
         // If the log modal is open for this engine, trigger a session reload.
         if (showDetailModal.value && selected.value?.instance.id === instance.id) {
@@ -468,6 +475,7 @@ async function refreshAll() {
         }
       },
       onHardware(hostId, hardware) {
+        console.log(`[App] onHardware called for host ${hostId}`);
         hardwareByHost.value[hostId] = hardware;
       }
     });

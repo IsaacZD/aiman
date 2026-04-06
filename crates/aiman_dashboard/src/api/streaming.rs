@@ -35,7 +35,9 @@ pub async fn sse_bridge(
         match result {
             Ok(bytes) => {
                 let text = String::from_utf8_lossy(&bytes);
-                Some(Ok::<_, std::convert::Infallible>(Event::default().data(text)))
+                // Strip "data: " prefix if present (SSE format)
+                let data = text.strip_prefix("data: ").unwrap_or(&text);
+                Some(Ok::<_, std::convert::Infallible>(Event::default().data(data)))
             }
             Err(_) => None,
         }
@@ -73,35 +75,45 @@ async fn handle_ws_bridge(
 
     tracing::info!(target_url = %target_url, "connecting to upstream websocket");
 
-    // Build request with optional auth
-    let request = if let Some(ref api_key) = host.api_key {
-        match http::Request::builder()
-            .uri(&target_url)
-            .header("Authorization", format!("Bearer {api_key}"))
-            .body(())
-        {
-            Ok(req) => req,
+    // Connect to upstream
+    // When using custom headers (like Authorization), we need to use tungstenite::client_request
+    let (upstream, _) = if let Some(ref api_key) = host.api_key {
+        // Use tungstenite's IntoClientRequest to properly build WebSocket request with auth
+        let request = match tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(&target_url) {
+            Ok(mut req) => {
+                req.headers_mut().insert(
+                    "Authorization",
+                    match http::header::HeaderValue::from_str(&format!("Bearer {api_key}")) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::error!(error = %e, "failed to create auth header");
+                            return;
+                        }
+                    }
+                );
+                req
+            }
             Err(e) => {
-                tracing::error!(error = %e, "failed to build upstream request");
+                tracing::error!(error = %e, "failed to build client request");
+                return;
+            }
+        };
+
+        match tokio_tungstenite::connect_async(request).await {
+            Ok(conn) => conn,
+            Err(e) => {
+                tracing::error!(error = %e, "failed to connect to upstream websocket");
                 return;
             }
         }
     } else {
-        match http::Request::builder().uri(&target_url).body(()) {
-            Ok(req) => req,
+        // No auth - simple connection
+        match tokio_tungstenite::connect_async(&target_url).await {
+            Ok(conn) => conn,
             Err(e) => {
-                tracing::error!(error = %e, "failed to build upstream request");
+                tracing::error!(error = %e, "failed to connect to upstream websocket");
                 return;
             }
-        }
-    };
-
-    // Connect to upstream
-    let (upstream, _) = match tokio_tungstenite::connect_async(request).await {
-        Ok(conn) => conn,
-        Err(e) => {
-            tracing::error!(error = %e, "failed to connect to upstream websocket");
-            return;
         }
     };
 
