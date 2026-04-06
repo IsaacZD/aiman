@@ -172,7 +172,10 @@ in {
         User = cfg.user;
         Group = cfg.group;
         ExecStart = "${cfg.package}/bin/aiman_agent";
-        Environment = fullEnv;
+        Environment = fullEnv ++ [
+          # Prepend wrappers for newuidmap/newgidmap (required by rootless podman)
+          "PATH=/run/wrappers/bin:${lib.makeBinPath (cfg.extraPackages ++ [pkgs.podman])}"
+        ];
         Restart = "on-failure";
         RestartSec = 2;
       };
