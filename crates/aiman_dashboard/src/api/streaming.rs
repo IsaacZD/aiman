@@ -31,13 +31,19 @@ pub async fn sse_bridge(
         .await?;
 
     // Convert bytes stream to SSE events
+    // The upstream sends raw SSE lines (e.g., "data: {...}"), so we parse and extract just the data
     let event_stream = stream.filter_map(|result| async move {
         match result {
             Ok(bytes) => {
                 let text = String::from_utf8_lossy(&bytes);
-                // Strip "data: " prefix if present (SSE format)
-                let data = text.strip_prefix("data: ").unwrap_or(&text);
-                Some(Ok::<_, std::convert::Infallible>(Event::default().data(data)))
+                // Parse SSE format: lines can be "data: <content>", "event: <type>", "id: <id>", etc.
+                // We only care about data lines. Empty lines signal event boundaries (ignored here).
+                if let Some(data) = text.strip_prefix("data: ") {
+                    Some(Ok::<_, std::convert::Infallible>(Event::default().data(data.trim())))
+                } else {
+                    // Skip non-data lines (event:, id:, retry:, comments, empty lines)
+                    None
+                }
             }
             Err(_) => None,
         }
