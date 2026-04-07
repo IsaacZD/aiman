@@ -132,6 +132,8 @@
         @open-config-template-modal="handleOpenConfigTemplateModal"
         @open-image-modal="handleOpenImageModal"
         @open-image-template-modal="handleOpenImageTemplateModal"
+        @prepare-image="(image) => prepareImage(image.id, configHostId)"
+        @prepare-all-images="prepareAllImages(configHostId)"
         @prune-images="pruneImages(configHostId)"
       />
     </main>
@@ -311,6 +313,9 @@ const {
   openImageModal,
   openImageTemplateModal,
   closeImageModal,
+  prepareImage,
+  prepareAllImages,
+  updateImageStatus,
   loadImages,
   saveImage,
   deleteImageFromModal,
@@ -476,6 +481,9 @@ async function refreshAll() {
       },
       onHardware(hostId, hardware) {
         hardwareByHost.value[hostId] = hardware;
+      },
+      onImageStatus(_hostId, image) {
+        updateImageStatus(image);
       }
     });
 

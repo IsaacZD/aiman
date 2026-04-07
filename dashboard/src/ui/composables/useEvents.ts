@@ -1,8 +1,9 @@
-import type { Host, EngineInstance, HardwareInfo } from "../types";
+import type { Host, EngineInstance, HardwareInfo, ContainerImage } from "../types";
 
 export interface EventCallbacks {
   onEngineStatus: (hostId: string, instance: EngineInstance) => void;
   onHardware: (hostId: string, hardware: HardwareInfo) => void;
+  onImageStatus?: (hostId: string, image: ContainerImage) => void;
 }
 
 const INITIAL_BACKOFF = 1000;
@@ -25,11 +26,14 @@ export function useEvents() {
           type: string;
           instance?: EngineInstance;
           hardware?: HardwareInfo;
+          image?: ContainerImage;
         };
         if (data.type === "engine_status" && data.instance) {
           callbacks.onEngineStatus(host.id, data.instance);
         } else if (data.type === "hardware" && data.hardware) {
           callbacks.onHardware(host.id, data.hardware);
+        } else if (data.type === "image_status" && data.image && callbacks.onImageStatus) {
+          callbacks.onImageStatus(host.id, data.image);
         }
       } catch (err) {
         console.error(`[SSE] Failed to parse event from host ${host.id}:`, err, event.data);

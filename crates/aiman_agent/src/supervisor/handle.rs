@@ -14,7 +14,7 @@ use std::{
 use anyhow::Context;
 use aiman_shared::{
     AutoRestart, ContainerBuild, ContainerConfig, ContainerImage, EngineConfig, EngineInstance,
-    EngineStatus, EngineType, LogEntry, LogSession, LogStream,
+    EngineStatus, EngineType, ImageStatus, LogEntry, LogSession, LogStream,
 };
 use chrono::Utc;
 use tokio::{
@@ -26,6 +26,26 @@ use tokio::{
 
 use super::error::SupervisorError;
 use super::store::LogWriter;
+
+/// Run the pull or build step for a container image.
+/// Called from a spawned task in Supervisor::prepare_image.
+pub async fn prepare_image_task(image: &ContainerImage) -> anyhow::Result<()> {
+    let has_dockerfile = image
+        .build
+        .as_ref()
+        .and_then(|b| b.dockerfile_content.as_deref())
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+
+    if has_dockerfile {
+        let build = image.build.as_ref().unwrap();
+        // For Dockerfile-based images, we need a tag. Use the image id as the local tag.
+        let tag = format!("aiman-build:{}", image.id);
+        build_container_image(build, &tag, &image.id).await
+    } else {
+        label_container_image(&image.image, &image.id).await
+    }
+}
 
 /// Normalize a container image name for Podman.
 ///
@@ -258,17 +278,10 @@ async fn run_container_engine(
     stop_rx: &mut watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let image = resolve_container_image(&handle.config, &handle.images).await?;
-    let resolved = resolve_container_spec(&handle.config, &image);
-
-    // Build/label phase: attach managed-by=aiman label so orphaned images can be pruned.
-    if let Some(build) = &resolved.build {
-        build_container_image(build, &resolved.image, &image.id).await?;
-    } else if resolved.pull {
-        // No custom Dockerfile: build a one-line FROM wrapper with --pull so podman
-        // fetches the latest registry image and we can attach our labels in one step.
-        label_container_image(&resolved.image, &image.id).await?;
+    if image.status != ImageStatus::Ready {
+        anyhow::bail!("container image '{}' is not ready — run Prepare first", image.name);
     }
-    // else: pull=false — use the existing local image as-is; no labeling.
+    let resolved = resolve_container_spec(&handle.config, &image);
 
     // Container name: prefer explicit config, fall back to engine id.
     let container_name = handle
@@ -937,9 +950,7 @@ struct ResolvedContainerSpec {
     command: Option<String>,
     args: Vec<String>,
     gpus: Option<String>,
-    pull: bool,
     remove: bool,
-    build: Option<ContainerBuild>,
 }
 
 async fn resolve_container_image(
@@ -977,9 +988,6 @@ fn resolve_container_spec(config: &EngineConfig, image: &ContainerImage) -> Reso
     env.extend(extra_env);
     env.extend(config.env.clone());
 
-    let pull = container
-        .and_then(|c| c.pull)
-        .unwrap_or(image.pull);
     let remove = container
         .and_then(|c| c.remove)
         .unwrap_or(image.remove);
@@ -1004,8 +1012,15 @@ fn resolve_container_spec(config: &EngineConfig, image: &ContainerImage) -> Reso
         .filter(|v| !v.trim().is_empty())
         .or_else(|| image.gpus.clone());
 
+    // For Dockerfile-based images (no image reference), use the local build tag.
+    let resolved_image = if image.image.trim().is_empty() {
+        format!("aiman-build:{}", image.id)
+    } else {
+        normalize_image_name(&image.image)
+    };
+
     ResolvedContainerSpec {
-        image: normalize_image_name(&image.image),
+        image: resolved_image,
         ports,
         volumes,
         env,
@@ -1013,9 +1028,7 @@ fn resolve_container_spec(config: &EngineConfig, image: &ContainerImage) -> Reso
         command,
         args,
         gpus,
-        pull,
         remove,
-        build: image.build.clone(),
     }
 }
 

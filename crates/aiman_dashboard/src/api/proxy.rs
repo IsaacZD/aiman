@@ -190,6 +190,22 @@ pub async fn delete_image(
     Ok((status, Json(response)))
 }
 
+/// Prepare (pull/build) image on host.
+pub async fn prepare_image(
+    State(state): State<AppState>,
+    Path((host_id, image_id)): Path<(String, String)>,
+) -> Result<(StatusCode, Json<serde_json::Value>), DashboardError> {
+    let host = get_host(&state, &host_id).await?;
+    let path = format!("/v1/images/{}/prepare", urlencoding::encode(&image_id));
+
+    let (status, response): (_, serde_json::Value) = state
+        .proxy_client
+        .request::<serde_json::Value>(Method::POST, &host.base_url, &path, host.api_key.as_deref(), None::<&()>)
+        .await?;
+
+    Ok((status, Json(response)))
+}
+
 /// Prune images on host.
 pub async fn prune_images(
     State(state): State<AppState>,

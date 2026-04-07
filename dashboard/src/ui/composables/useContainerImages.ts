@@ -129,11 +129,15 @@ export function useContainerImages() {
     if (!imageForm.value.name.trim()) {
       errors.push("Display name is required.");
     }
-    if (!imageForm.value.image.trim()) {
-      errors.push("Image reference is required.");
+    const hasImageRef = imageForm.value.image.trim().length > 0;
+    const hasDockerfile = imageForm.value.build.enabled && imageForm.value.build.dockerfile_content.trim().length > 0;
+    if (hasImageRef && hasDockerfile) {
+      errors.push("Image reference and Dockerfile are mutually exclusive.");
+    } else if (!hasImageRef && !hasDockerfile) {
+      errors.push("Either an image reference or Dockerfile content is required.");
     }
     if (imageForm.value.build.enabled && !imageForm.value.build.dockerfile_content.trim()) {
-      errors.push("Dockerfile content is required.");
+      errors.push("Dockerfile content is required when build is enabled.");
     }
 
     const envEntries = buildEnvEntries(imageForm.value.env, errors);
@@ -157,7 +161,7 @@ export function useContainerImages() {
     const payload: ContainerImage = {
       id: imageId,
       name: imageForm.value.name.trim(),
-      image: imageForm.value.image.trim(),
+      image: imageForm.value.build.enabled ? "" : imageForm.value.image.trim(),
       ports: cleanStringList(imageForm.value.ports),
       volumes: cleanStringList(imageForm.value.volumes),
       env: envEntries,
@@ -175,7 +179,8 @@ export function useContainerImages() {
             pull: Boolean(imageForm.value.build.pull),
             no_cache: Boolean(imageForm.value.build.no_cache)
           }
-        : null
+        : null,
+      status: "NotReady"
     };
 
     const actionLabel = imageMode.value === "create" ? "Create image" : "Save changes to image";
@@ -251,6 +256,38 @@ export function useContainerImages() {
     await loadImages(configHostId);
   }
 
+  async function prepareImage(imageId: string, configHostId: string | null) {
+    if (!configHostId) return;
+    imageErrors.value = [];
+    const res = await fetch(
+      `/api/hosts/${configHostId}/images/${encodeURIComponent(imageId)}/prepare`,
+      { method: "POST" }
+    );
+    if (!res.ok) {
+      const raw = await res.text().catch(() => "");
+      imageErrors.value = [`Prepare failed: ${raw || `HTTP ${res.status}`}`];
+    }
+  }
+
+  async function prepareAllImages(configHostId: string | null) {
+    if (!configHostId) return;
+    imageErrors.value = [];
+    const toPrepare = images.value.filter(
+      (img) => img.status !== "Ready" && img.status !== "Preparing"
+    );
+    for (const img of toPrepare) {
+      await prepareImage(img.id, configHostId);
+      if (imageErrors.value.length) break;
+    }
+  }
+
+  function updateImageStatus(image: ContainerImage) {
+    const idx = images.value.findIndex((img) => img.id === image.id);
+    if (idx !== -1) {
+      images.value[idx] = { ...images.value[idx], status: image.status };
+    }
+  }
+
   async function deleteImageFromModal(configHostId: string | null) {
     if (!imageForm.value.id.trim()) {
       return;
@@ -278,6 +315,9 @@ export function useContainerImages() {
     saveImage,
     deleteImage,
     deleteImageFromModal,
-    pruneImages
+    pruneImages,
+    prepareImage,
+    prepareAllImages,
+    updateImageStatus
   };
 }

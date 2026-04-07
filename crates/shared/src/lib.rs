@@ -125,6 +125,16 @@ impl Default for AutoRestart {
     }
 }
 
+/// Readiness state of a container image (pulled or built).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ImageStatus {
+    #[default]
+    NotReady,
+    Preparing,
+    Ready,
+    Failed,
+}
+
 /// Container build settings for containerized engines.
 /// The agent creates a temporary directory, writes `dockerfile_content` as
 /// `Dockerfile` there, and uses that directory as the build context.
@@ -158,6 +168,8 @@ pub struct ContainerImage {
     pub pull: bool,
     pub remove: bool,
     pub build: Option<ContainerBuild>,
+    #[serde(default)]
+    pub status: ImageStatus,
 }
 
 /// Container runtime settings for containerized engines.

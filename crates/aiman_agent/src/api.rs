@@ -34,17 +34,18 @@ pub async fn hardware_info(State(state): State<AppState>) -> Json<HardwareRespon
 pub async fn events_sse(State(state): State<AppState>) -> impl IntoResponse {
     let status_rx = state.supervisor.subscribe_status();
     let hardware_rx = state.supervisor.subscribe_hardware();
+    let image_rx = state.supervisor.subscribe_image_status();
 
     let event_stream = stream::unfold(
-        (status_rx, hardware_rx),
-        |(mut srx, mut hrx)| async move {
+        (status_rx, hardware_rx, image_rx),
+        |(mut srx, mut hrx, mut irx)| async move {
             loop {
                 tokio::select! {
                     result = srx.recv() => {
                         match result {
                             Ok(instance) => {
                                 let data = json!({"type": "engine_status", "instance": instance}).to_string();
-                                return Some((Ok::<Event, Infallible>(Event::default().data(data)), (srx, hrx)));
+                                return Some((Ok::<Event, Infallible>(Event::default().data(data)), (srx, hrx, irx)));
                             }
                             Err(broadcast::error::RecvError::Lagged(_)) => continue,
                             Err(broadcast::error::RecvError::Closed) => return None,
@@ -54,7 +55,17 @@ pub async fn events_sse(State(state): State<AppState>) -> impl IntoResponse {
                         match result {
                             Ok(hw) => {
                                 let data = json!({"type": "hardware", "hardware": hw}).to_string();
-                                return Some((Ok::<Event, Infallible>(Event::default().data(data)), (srx, hrx)));
+                                return Some((Ok::<Event, Infallible>(Event::default().data(data)), (srx, hrx, irx)));
+                            }
+                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(broadcast::error::RecvError::Closed) => return None,
+                        }
+                    }
+                    result = irx.recv() => {
+                        match result {
+                            Ok(image) => {
+                                let data = json!({"type": "image_status", "image": image}).to_string();
+                                return Some((Ok::<Event, Infallible>(Event::default().data(data)), (srx, hrx, irx)));
                             }
                             Err(broadcast::error::RecvError::Lagged(_)) => continue,
                             Err(broadcast::error::RecvError::Closed) => return None,
@@ -500,6 +511,19 @@ pub async fn delete_image(
         .await
         .map_err(map_supervisor_error)?;
     Ok(Json(DeleteResponse { ok: true }))
+}
+
+pub async fn prepare_image(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ImageResponse>, StatusCode> {
+    tracing::info!(image_id = %id, "prepare image API called");
+    let image = state
+        .supervisor
+        .prepare_image(&id)
+        .await
+        .map_err(map_supervisor_error)?;
+    Ok(Json(ImageResponse { image }))
 }
 
 #[derive(Deserialize)]

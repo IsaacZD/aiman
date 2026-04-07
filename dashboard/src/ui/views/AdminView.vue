@@ -27,6 +27,9 @@
           New config
         </button>
         <template v-if="adminTab === 'images'">
+          <button class="ghost" @click="$emit('prepare-all-images')" :disabled="!hasUnpreparedImages">
+            Prepare all
+          </button>
           <button class="ghost" @click="$emit('prune-images')">Prune images</button>
           <button class="secondary" @click="$emit('open-image-modal')">New image</button>
         </template>
@@ -63,11 +66,23 @@
         <div class="config-list">
           <article v-for="image in images" :key="image.id" class="config-card">
             <div>
-              <h3>{{ image.name || image.id }}</h3>
-              <p class="config-meta">{{ image.image }}</p>
+              <h3>
+                {{ image.name || image.id }}
+                <span class="image-status-badge" :class="imageStatusClass(image.status)">
+                  {{ image.status ?? "NotReady" }}
+                </span>
+              </h3>
+              <p class="config-meta">{{ image.build ? "Dockerfile" : image.image }}</p>
               <p class="config-meta config-id">{{ image.id }}</p>
             </div>
             <div class="config-actions">
+              <button
+                class="ghost"
+                @click="$emit('prepare-image', image)"
+                :disabled="image.status === 'Preparing'"
+              >
+                {{ image.status === "Preparing" ? "Preparing…" : image.build ? "Build" : "Pull" }}
+              </button>
               <button class="ghost" @click="$emit('open-image-template-modal', image)">
                 Create from template
               </button>
@@ -82,8 +97,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue";
-import type { Host, EngineConfig, ContainerImage } from "../types";
+import { ref, computed, watch } from "vue";
+import type { Host, EngineConfig, ContainerImage, ImageStatus } from "../types";
 
 const props = defineProps<{
   selectedHost: Host | null;
@@ -99,10 +114,29 @@ defineEmits<{
   (e: "open-config-template-modal", config: EngineConfig): void;
   (e: "open-image-modal", image?: ContainerImage): void;
   (e: "open-image-template-modal", image: ContainerImage): void;
+  (e: "prepare-image", image: ContainerImage): void;
+  (e: "prepare-all-images"): void;
   (e: "prune-images"): void;
 }>();
 
 const adminTab = ref<"configs" | "images">("configs");
+
+const hasUnpreparedImages = computed(() =>
+  props.images.some((img) => img.status !== "Ready" && img.status !== "Preparing")
+);
+
+function imageStatusClass(status: ImageStatus | undefined): string {
+  switch (status) {
+    case "Ready":
+      return "status-ready";
+    case "Preparing":
+      return "status-preparing";
+    case "Failed":
+      return "status-failed";
+    default:
+      return "status-not-ready";
+  }
+}
 
 // Reset to configs tab when switching to a different host.
 watch(
@@ -112,3 +146,33 @@ watch(
   }
 );
 </script>
+
+<style scoped>
+.image-status-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 8px;
+  margin-left: 8px;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.status-ready {
+  background: rgba(60, 207, 145, 0.18);
+  color: #3ccf91;
+}
+.status-preparing {
+  background: rgba(245, 192, 79, 0.18);
+  color: #f5c04f;
+}
+.status-failed {
+  background: rgba(255, 107, 107, 0.18);
+  color: #ff6b6b;
+}
+.status-not-ready {
+  background: rgba(154, 163, 178, 0.18);
+  color: #9aa3b2;
+}
+</style>

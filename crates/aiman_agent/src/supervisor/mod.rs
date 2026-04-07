@@ -12,7 +12,7 @@ use std::{
     sync::Arc,
 };
 
-use aiman_shared::{ContainerImage, EngineConfig, EngineInstance, EngineStatus, EngineType};
+use aiman_shared::{ContainerImage, EngineConfig, EngineInstance, EngineStatus, EngineType, ImageStatus};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, RwLock};
 
@@ -34,6 +34,7 @@ pub struct Supervisor {
     // Broadcast channels for reactive push to SSE clients.
     status_tx: broadcast::Sender<EngineInstance>,
     hardware_tx: broadcast::Sender<HardwareInfo>,
+    image_status_tx: broadcast::Sender<ContainerImage>,
 }
 
 impl Supervisor {
@@ -66,9 +67,10 @@ impl Supervisor {
         let benchmark_path = data_dir.join("benchmarks.jsonl");
 
         // Broadcast channels: capacity 256 for status events (one per transition),
-        // 16 for hardware (periodic, low frequency).
+        // 16 for hardware (periodic, low frequency), 64 for image status updates.
         let (status_tx, _) = broadcast::channel::<EngineInstance>(256);
         let (hardware_tx, _) = broadcast::channel::<HardwareInfo>(16);
+        let (image_status_tx, _) = broadcast::channel::<ContainerImage>(64);
 
         for config in configs_vec {
             let id = config.id.clone();
@@ -98,6 +100,7 @@ impl Supervisor {
             benchmark_path,
             status_tx,
             hardware_tx,
+            image_status_tx,
         })
     }
 
@@ -148,9 +151,10 @@ impl Supervisor {
 
     pub async fn add_image(
         &self,
-        image: ContainerImage,
+        mut image: ContainerImage,
     ) -> Result<ContainerImage, SupervisorError> {
         validate_image(&image)?;
+        image.status = ImageStatus::NotReady;
         let mut images = self.images.write().await;
         if images.contains_key(&image.id) {
             return Err(SupervisorError::ImageExists);
@@ -165,7 +169,7 @@ impl Supervisor {
     pub async fn update_image(
         &self,
         id: &str,
-        image: ContainerImage,
+        mut image: ContainerImage,
     ) -> Result<ContainerImage, SupervisorError> {
         validate_image(&image)?;
         if id != image.id {
@@ -174,11 +178,22 @@ impl Supervisor {
             ));
         }
         let mut images = self.images.write().await;
-        if !images.contains_key(id) {
-            return Err(SupervisorError::ImageNotFound);
+        let existing = images.get(id).ok_or(SupervisorError::ImageNotFound)?;
+
+        // Reset status to NotReady if the image source changed.
+        let image_ref_changed = existing.image != image.image;
+        let dockerfile_changed = existing.build.as_ref().and_then(|b| b.dockerfile_content.as_deref())
+            != image.build.as_ref().and_then(|b| b.dockerfile_content.as_deref());
+        if image_ref_changed || dockerfile_changed {
+            image.status = ImageStatus::NotReady;
+        } else {
+            // Preserve existing status — don't let the client overwrite it.
+            image.status = existing.status.clone();
         }
+
         images.insert(id.to_string(), image.clone());
         persist_image_store(&self.images_path, &images).await;
+        let _ = self.image_status_tx.send(image.clone());
         tracing::info!(image_id = %id, "updated container image");
         Ok(image)
     }
@@ -203,6 +218,49 @@ impl Supervisor {
         persist_image_store(&self.images_path, &images).await;
         tracing::info!(image_id = %id, "removed container image");
         Ok(())
+    }
+
+    /// Prepare (pull or build) a container image asynchronously.
+    /// Returns the image with status set to `Preparing`.
+    /// The actual work runs in a background task; status updates are broadcast via SSE.
+    pub async fn prepare_image(&self, id: &str) -> Result<ContainerImage, SupervisorError> {
+        let mut images = self.images.write().await;
+        let image = images.get_mut(id).ok_or(SupervisorError::ImageNotFound)?;
+        if image.status == ImageStatus::Preparing {
+            return Err(SupervisorError::ImagePreparing);
+        }
+        image.status = ImageStatus::Preparing;
+        let image_snapshot = image.clone();
+        persist_image_store(&self.images_path, &images).await;
+        let _ = self.image_status_tx.send(image_snapshot.clone());
+        drop(images);
+
+        // Spawn background task to do the actual pull/build.
+        let images_ref = self.images.clone();
+        let images_path = self.images_path.clone();
+        let tx = self.image_status_tx.clone();
+        let image_clone = image_snapshot.clone();
+        tokio::spawn(async move {
+            let result = handle::prepare_image_task(&image_clone).await;
+            let mut images = images_ref.write().await;
+            if let Some(img) = images.get_mut(&image_clone.id) {
+                match result {
+                    Ok(()) => {
+                        img.status = ImageStatus::Ready;
+                        tracing::info!(image_id = %image_clone.id, "image prepared successfully");
+                    }
+                    Err(err) => {
+                        img.status = ImageStatus::Failed;
+                        tracing::error!(image_id = %image_clone.id, error = %err, "image preparation failed");
+                    }
+                }
+                let updated = img.clone();
+                persist_image_store(&images_path, &images).await;
+                let _ = tx.send(updated);
+            }
+        });
+
+        Ok(image_snapshot)
     }
 
     pub async fn add_config(&self, config: EngineConfig) -> Result<EngineConfig, SupervisorError> {
@@ -374,6 +432,10 @@ impl Supervisor {
         self.hardware_tx.subscribe()
     }
 
+    pub fn subscribe_image_status(&self) -> broadcast::Receiver<ContainerImage> {
+        self.image_status_tx.subscribe()
+    }
+
     /// Returns a clone of the hardware sender so the polling task in main can push updates.
     pub fn hardware_tx(&self) -> broadcast::Sender<HardwareInfo> {
         self.hardware_tx.clone()
@@ -525,21 +587,26 @@ fn validate_image(image: &ContainerImage) -> Result<(), SupervisorError> {
     if image.name.trim().is_empty() {
         return Err(SupervisorError::ImageInvalid("name is required".to_string()));
     }
-    if image.image.trim().is_empty() {
-        return Err(SupervisorError::ImageInvalid("image is required".to_string()));
+
+    let has_image_ref = !image.image.trim().is_empty();
+    let has_dockerfile = image
+        .build
+        .as_ref()
+        .and_then(|b| b.dockerfile_content.as_deref())
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+
+    if has_image_ref && has_dockerfile {
+        return Err(SupervisorError::ImageInvalid(
+            "image reference and Dockerfile are mutually exclusive".to_string(),
+        ));
     }
-    if let Some(build) = &image.build {
-        if build
-            .dockerfile_content
-            .as_ref()
-            .map(|value| value.trim().is_empty())
-            .unwrap_or(true)
-        {
-            return Err(SupervisorError::ImageInvalid(
-                "dockerfile_content is required when build is enabled".to_string(),
-            ));
-        }
+    if !has_image_ref && !has_dockerfile {
+        return Err(SupervisorError::ImageInvalid(
+            "either an image reference or Dockerfile content is required".to_string(),
+        ));
     }
+
     Ok(())
 }
 

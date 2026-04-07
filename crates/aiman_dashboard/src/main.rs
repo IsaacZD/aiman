@@ -92,6 +92,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/hosts/{hostId}/images/{imageId}",
             put(api::proxy::update_image).delete(api::proxy::delete_image),
         )
+        .route("/api/hosts/{hostId}/images/{imageId}/prepare", post(api::proxy::prepare_image))
         .route("/api/hosts/{hostId}/images/prune", post(api::proxy::prune_images))
         // Engine control
         .route("/api/hosts/{hostId}/engines/{engineId}/start", post(api::proxy::start_engine))

@@ -49,6 +49,8 @@ export type EngineConfig = {
   } | null;
 };
 
+export type ImageStatus = "NotReady" | "Preparing" | "Ready" | "Failed";
+
 export type ContainerImage = {
   id: string;
   name: string;
@@ -69,6 +71,7 @@ export type ContainerImage = {
     pull?: boolean;
     no_cache?: boolean;
   } | null;
+  status: ImageStatus;
 };
 
 export type EngineInstance = {
