@@ -28,6 +28,7 @@
             <option value="ik_llamacpp">ik_llamacpp</option>
             <option value="fastllm">fastllm</option>
             <option value="KTransformers">KTransformers</option>
+            <option value="TabbyAPI">TabbyAPI</option>
             <option value="Container">Container</option>
             <option value="Custom">Custom</option>
           </select>
@@ -73,6 +74,14 @@
             :model-options="ggufModelOptions"
             :open-model-picker="
               (onSelect) => $emit('open-model-picker', ggufModelOptions, 'Select GGUF model', onSelect)
+            "
+          />
+          <TabbyAPIConfigFields
+            v-else-if="form.engine_type === 'TabbyAPI'"
+            v-model="tabbyAPIArgsForm"
+            :model-options="exl3ModelOptions"
+            :open-model-picker="
+              (onSelect) => $emit('open-model-picker', exl3ModelOptions, 'Select EXL model', onSelect)
             "
           />
           <ContainerConfigFields
@@ -175,6 +184,7 @@ import VllmConfigFields from "./VllmConfigFields.vue";
 import LlamaCppConfigFields from "./LlamaCppConfigFields.vue";
 import FastllmConfigFields from "./FastllmConfigFields.vue";
 import KTransformersConfigFields from "./KTransformersConfigFields.vue";
+import TabbyAPIConfigFields from "./TabbyAPIConfigFields.vue";
 import CustomConfigFields from "./CustomConfigFields.vue";
 import ContainerConfigFields from "./ContainerConfigFields.vue";
 import EnvVarListEditor from "./EnvVarListEditor.vue";
@@ -216,6 +226,7 @@ const vllmArgsForm = defineModel<any>("vllmArgsForm", { required: true });
 const llamaCppArgsForm = defineModel<any>("llamaCppArgsForm", { required: true });
 const fastllmArgsForm = defineModel<any>("fastllmArgsForm", { required: true });
 const kTransformersArgsForm = defineModel<any>("kTransformersArgsForm", { required: true });
+const tabbyAPIArgsForm = defineModel<any>("tabbyApiArgsForm", { required: true });
 const customArgsForm = defineModel<any>("customArgsForm", { required: true });
 const containerEngineForm = defineModel<any>("containerEngineForm", { required: true });
 
@@ -224,6 +235,9 @@ const vllmModelOptions = computed(() =>
 );
 const ggufModelOptions = computed(() =>
   props.modelArtifacts.filter((artifact) => artifact.kind === "gguf")
+);
+const exl3ModelOptions = computed(() =>
+  props.modelArtifacts.filter((artifact) => artifact.kind === "exl2" || artifact.kind === "exl3" || artifact.kind === "snapshot")
 );
 
 const filteredModelPickerOptions = computed(() => {

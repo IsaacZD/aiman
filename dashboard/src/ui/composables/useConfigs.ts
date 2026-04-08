@@ -21,6 +21,11 @@ import {
   parseKTransformersArgs
 } from "../engine-args/kTransformers";
 import {
+  buildTabbyAPIArgs,
+  createTabbyAPIArgsForm,
+  parseTabbyAPIArgs
+} from "../engine-args/tabbyapi";
+import {
   buildCustomArgs,
   createCustomArgsForm,
   parseCustomArgs
@@ -35,6 +40,7 @@ export const defaultCommands: Record<EngineConfig["engine_type"], string> = {
   ik_llamacpp: "ikllama-server",
   fastllm: "ftllm serve",
   KTransformers: "ktransformers-server",
+  TabbyAPI: "python -m tabbyAPI.main",
   Custom: "",
   Container: "podman"
 };
@@ -108,6 +114,7 @@ export function useConfigs() {
   const llamaCppArgsForm = ref(createLlamaCppArgsForm());
   const fastllmArgsForm = ref(createFastllmArgsForm());
   const kTransformersArgsForm = ref(createKTransformersArgsForm());
+  const tabbyAPIArgsForm = ref(createTabbyAPIArgsForm());
   const customArgsForm = ref(createCustomArgsForm());
   const containerEngineForm = ref(createContainerEngineForm());
 
@@ -137,6 +144,7 @@ export function useConfigs() {
     llamaCppArgsForm.value = createLlamaCppArgsForm();
     fastllmArgsForm.value = createFastllmArgsForm();
     kTransformersArgsForm.value = createKTransformersArgsForm();
+    tabbyAPIArgsForm.value = createTabbyAPIArgsForm();
     customArgsForm.value = createCustomArgsForm();
     containerEngineForm.value = createContainerEngineForm();
   }
@@ -168,6 +176,8 @@ export function useConfigs() {
       fastllmArgsForm.value = parseFastllmArgs(config.args ?? []);
     } else if (config.engine_type === "KTransformers") {
       kTransformersArgsForm.value = parseKTransformersArgs(config.args ?? []);
+    } else if (config.engine_type === "TabbyAPI") {
+      tabbyAPIArgsForm.value = parseTabbyAPIArgs(config.args ?? []);
     } else if (config.engine_type === "Container") {
       const ct = config.container ?? null;
       containerEngineForm.value = {
@@ -344,6 +354,8 @@ export function useConfigs() {
       args = buildFastllmArgs(fastllmArgsForm.value);
     } else if (configForm.value.engine_type === "KTransformers") {
       args = buildKTransformersArgs(kTransformersArgsForm.value);
+    } else if (configForm.value.engine_type === "TabbyAPI") {
+      args = buildTabbyAPIArgs(tabbyAPIArgsForm.value);
     } else if (configForm.value.engine_type === "Container") {
       args = [];
     } else {
@@ -524,6 +536,7 @@ export function useConfigs() {
     llamaCppArgsForm,
     fastllmArgsForm,
     kTransformersArgsForm,
+    tabbyAPIArgsForm,
     customArgsForm,
     containerEngineForm,
     resetConfigForm,

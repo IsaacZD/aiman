@@ -1,7 +1,7 @@
 <template>
   <div class="engine-fields">
     <label>
-      Model path
+      Model path <code>--model</code>
       <div class="model-input-row">
         <input v-model="form.modelPath" type="text" placeholder="/models/ktr.gguf" />
         <button
@@ -15,7 +15,7 @@
       </div>
     </label>
     <label>
-      Port (optional)
+      Port <code>--port</code>
       <input v-model="form.port" type="text" placeholder="8080" />
     </label>
     <label>

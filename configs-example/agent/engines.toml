@@ -25,6 +25,20 @@ auto_restart = { enabled = false, max_retries = 0, backoff_secs = 5 }
 env = []
 
 [[engine]]
+id = "exl3-tabbyapi"
+name = "EXL3 model via TabbyAPI"
+engine_type = "TabbyAPI"
+command = "python"
+args = ["-m", "tabbyAPI.main", "--model-dir", "/models/exl3-model", "--port", "5000"]
+working_dir = "/var/lib/aiman"
+
+auto_restart = { enabled = true, max_retries = 3, backoff_secs = 10 }
+
+env = [
+  { key = "CUDA_VISIBLE_DEVICES", value = "0" }
+]
+
+[[engine]]
 id = "vllm-container"
 name = "vLLM via Podman"
 engine_type = "Container"

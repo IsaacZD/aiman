@@ -15,7 +15,7 @@
       </div>
     </label>
     <label>
-      Port (optional)
+      Port <code>--port</code>
       <input v-model="form.port" type="text" placeholder="8080" />
     </label>
     <label>

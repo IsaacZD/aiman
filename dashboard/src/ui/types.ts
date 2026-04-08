@@ -22,6 +22,7 @@ export type EngineConfig = {
     | "Lvllm"
     | "fastllm"
     | "KTransformers"
+    | "TabbyAPI"
     | "Custom"
     | "Container";
   command: string;

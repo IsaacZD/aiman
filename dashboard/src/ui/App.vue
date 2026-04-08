@@ -178,6 +178,7 @@
     v-model:llama-cpp-args-form="llamaCppArgsForm"
     v-model:fastllm-args-form="fastllmArgsForm"
     v-model:k-transformers-args-form="kTransformersArgsForm"
+    v-model:tabby-api-args-form="tabbyAPIArgsForm"
     v-model:custom-args-form="customArgsForm"
     v-model:container-engine-form="containerEngineForm"
     @close="closeConfigModal"
@@ -289,6 +290,7 @@ const {
   llamaCppArgsForm,
   fastllmArgsForm,
   kTransformersArgsForm,
+  tabbyAPIArgsForm,
   customArgsForm,
   containerEngineForm,
   resetConfigForm,

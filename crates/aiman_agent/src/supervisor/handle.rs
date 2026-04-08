@@ -325,7 +325,7 @@ async fn run_container_engine(
     // Determine whether we wait for a ready marker before setting Running.
     let wait_for_ready = matches!(
         handle.config.engine_type,
-        EngineType::Vllm | EngineType::Lvllm
+        EngineType::Vllm | EngineType::Lvllm | EngineType::TabbyAPI
     );
     let ready_marker = if wait_for_ready {
         Some("Application startup complete.".to_string())
@@ -714,7 +714,7 @@ async fn run_process_engine(
     let pid = child.id();
     let wait_for_ready = matches!(
         handle.config.engine_type,
-        EngineType::Vllm | EngineType::Lvllm
+        EngineType::Vllm | EngineType::Lvllm | EngineType::TabbyAPI
     );
     let ready_marker = if wait_for_ready {
         Some("Application startup complete.".to_string())

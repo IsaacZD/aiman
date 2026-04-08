@@ -57,6 +57,7 @@ pub enum EngineType {
     #[serde(rename = "fastllm")]
     Fastllm,
     KTransformers,
+    TabbyAPI,
     Custom,
     Container,
 }

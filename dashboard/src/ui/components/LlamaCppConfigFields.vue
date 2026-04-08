@@ -1,7 +1,7 @@
 <template>
   <div class="engine-fields">
     <label>
-      Model path
+      Model path <code>--model</code>
       <div class="model-input-row">
         <input v-model="form.modelPath" type="text" placeholder="/models/qwen.gguf" />
         <button
@@ -15,15 +15,15 @@
       </div>
     </label>
     <label>
-      Port (optional)
+      Port <code>--port</code>
       <input v-model="form.port" type="text" placeholder="8081" />
     </label>
     <label>
-      GPU layers (optional)
+      GPU layers <code>--n-gpu-layers</code>
       <input v-model="form.gpuLayers" type="text" placeholder="40" />
     </label>
     <label>
-      Context size (optional)
+      Context size <code>--ctx-size</code>
       <input v-model="form.ctxSize" type="text" placeholder="4096" />
     </label>
     <label>
