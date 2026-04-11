@@ -41,12 +41,15 @@
       </small>
     </label>
     <label>
-      Extra run args (deprecated)
+      Extra run args
       <ArgumentListEditor
         v-model="form.extra_run_args"
         add-label="Add runtime arg"
-        placeholder="Legacy CLI args (deprecated)"
+        placeholder="--ipc=host"
       />
+      <small style="display: block; margin-top: 4px; opacity: 0.7;">
+        Extra flags passed to podman create, merged after image-level run args.
+      </small>
     </label>
     <label>
       Override user

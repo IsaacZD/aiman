@@ -191,7 +191,7 @@ pub struct ContainerImage {
     pub ports: Vec<String>,
     pub volumes: Vec<String>,
     pub env: Vec<EnvVar>,
-    /// Deprecated — GPU access is configured via `gpus` instead.
+    /// Extra arguments passed directly to `podman create` (e.g. `--ipc=host`).
     pub run_args: Vec<String>,
     /// GPU device access via CDI: "all", "0", "0,1".
     /// Maps to podman `--device nvidia.com/gpu=<value>`.
@@ -215,7 +215,7 @@ pub struct ContainerConfig {
     pub extra_ports: Vec<String>,
     pub extra_volumes: Vec<String>,
     pub extra_env: Vec<EnvVar>,
-    /// Deprecated — use `gpus` on the image instead.
+    /// Extra arguments passed directly to `podman create`, merged after image-level `run_args`.
     pub extra_run_args: Vec<String>,
     /// Override image-level GPU setting for this engine instance.
     pub gpus: Option<String>,

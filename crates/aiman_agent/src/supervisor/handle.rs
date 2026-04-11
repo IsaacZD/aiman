@@ -571,6 +571,14 @@ async fn create_container(
         cmd.arg("--user").arg(user);
     }
 
+    // Extra run args (e.g. --ipc=host, --shm-size=1g).
+    for run_arg in &resolved.run_args {
+        let run_arg = run_arg.trim();
+        if !run_arg.is_empty() {
+            cmd.arg(run_arg);
+        }
+    }
+
     // Image.
     cmd.arg(resolved.image.trim());
 
@@ -946,6 +954,7 @@ struct ResolvedContainerSpec {
     ports: Vec<String>,
     volumes: Vec<String>,
     env: Vec<aiman_shared::EnvVar>,
+    run_args: Vec<String>,
     user: Option<String>,
     command: Option<String>,
     args: Vec<String>,
@@ -979,6 +988,9 @@ fn resolve_container_spec(config: &EngineConfig, image: &ContainerImage) -> Reso
     let extra_env = container
         .map(|c| c.extra_env.clone())
         .unwrap_or_default();
+    let extra_run_args = container
+        .map(|c| c.extra_run_args.clone())
+        .unwrap_or_default();
 
     let mut ports = image.ports.clone();
     ports.extend(extra_ports);
@@ -987,6 +999,8 @@ fn resolve_container_spec(config: &EngineConfig, image: &ContainerImage) -> Reso
     let mut env = image.env.clone();
     env.extend(extra_env);
     env.extend(config.env.clone());
+    let mut run_args = image.run_args.clone();
+    run_args.extend(extra_run_args);
 
     let remove = container
         .and_then(|c| c.remove)
@@ -1024,6 +1038,7 @@ fn resolve_container_spec(config: &EngineConfig, image: &ContainerImage) -> Reso
         ports,
         volumes,
         env,
+        run_args,
         user,
         command,
         args,

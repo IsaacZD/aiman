@@ -91,6 +91,17 @@
       </small>
     </label>
     <label>
+      Run args
+      <ArgumentListEditor
+        v-model="form.run_args"
+        add-label="Add run arg"
+        placeholder="--ipc=host"
+      />
+      <small style="display: block; margin-top: 4px; opacity: 0.7;">
+        Extra flags passed directly to podman create.
+      </small>
+    </label>
+    <label>
       Container user
       <input v-model="form.user" type="text" placeholder="1000:1000" />
     </label>
