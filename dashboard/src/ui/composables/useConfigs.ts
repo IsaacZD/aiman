@@ -55,7 +55,10 @@ export function createEmptyConfigForm() {
     working_dir: "",
     auto_restart_enabled: false,
     auto_restart_max_retries: 0,
-    auto_restart_backoff_secs: 5
+    auto_restart_backoff_secs: 5,
+    visible: true,
+    description: "",
+    comments: ""
   };
 }
 
@@ -164,7 +167,10 @@ export function useConfigs() {
       working_dir: config.working_dir ?? "",
       auto_restart_enabled: config.auto_restart.enabled,
       auto_restart_max_retries: config.auto_restart.max_retries,
-      auto_restart_backoff_secs: config.auto_restart.backoff_secs
+      auto_restart_backoff_secs: config.auto_restart.backoff_secs,
+      visible: config.visible ?? true,
+      description: config.description ?? "",
+      comments: config.comments ?? ""
     };
     containerEngineForm.value = createContainerEngineForm();
     // Parse args into the right template so the form mirrors existing configs.
@@ -395,6 +401,9 @@ export function useConfigs() {
         max_retries: Number(configForm.value.auto_restart_max_retries) || 0,
         backoff_secs: Number(configForm.value.auto_restart_backoff_secs) || 5
       },
+      visible: configForm.value.visible,
+      description: configForm.value.description.trim(),
+      comments: configForm.value.comments.trim(),
       ...(containerConfig ? { container: containerConfig } : {})
     };
 

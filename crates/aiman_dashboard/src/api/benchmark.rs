@@ -26,33 +26,13 @@ pub async fn run_benchmark(
             .ok_or(DashboardError::HostNotFound)?
     };
 
-    // Fetch engine config from host
-    let config_path = format!("/v1/configs/{engine_id}");
-    let (_, config_body): (_, serde_json::Value) = state
-        .proxy_client
-        .request::<serde_json::Value>(
-            Method::GET,
-            &host.base_url,
-            &config_path,
-            host.api_key.as_deref(),
-            None::<&()>,
-        )
-        .await
-        .map_err(|e| DashboardError::BenchmarkFailed(format!("failed to fetch config: {e}")))?;
-
-    let config: aiman_shared::EngineConfig = serde_json::from_value(
-        config_body.get("config").cloned().unwrap_or(config_body.clone())
-    )
-    .map_err(|e| DashboardError::BenchmarkFailed(format!("invalid config: {e}")))?;
-
-    // Fetch engine status
-    let engines_path = "/v1/engines";
+    // Fetch engine list to find instance status and config_id
     let (_, engines_body): (_, serde_json::Value) = state
         .proxy_client
         .request::<serde_json::Value>(
             Method::GET,
             &host.base_url,
-            engines_path,
+            "/v1/engines",
             host.api_key.as_deref(),
             None::<&()>,
         )
@@ -63,8 +43,11 @@ pub async fn run_benchmark(
     let instance = engines
         .and_then(|arr| arr.iter().find(|e| e.get("id").and_then(|v| v.as_str()) == Some(&engine_id)));
 
+    let instance = instance
+        .ok_or_else(|| DashboardError::BenchmarkFailed(format!("engine {engine_id} not found")))?;
+
     let status = instance
-        .and_then(|i| i.get("status"))
+        .get("status")
         .and_then(|s| s.as_str())
         .unwrap_or("Unknown");
 
@@ -73,6 +56,34 @@ pub async fn run_benchmark(
             "engine is not running (status: {status})"
         )));
     }
+
+    let config_id = instance
+        .get("config_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&engine_id);
+
+    // Fetch all configs and find the one matching this engine
+    let (_, configs_body): (_, serde_json::Value) = state
+        .proxy_client
+        .request::<serde_json::Value>(
+            Method::GET,
+            &host.base_url,
+            "/v1/configs",
+            host.api_key.as_deref(),
+            None::<&()>,
+        )
+        .await
+        .map_err(|e| DashboardError::BenchmarkFailed(format!("failed to fetch configs: {e}")))?;
+
+    let config_value = configs_body
+        .get("configs")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.iter().find(|c| c.get("id").and_then(|v| v.as_str()) == Some(config_id)))
+        .cloned()
+        .ok_or_else(|| DashboardError::BenchmarkFailed(format!("config {config_id} not found")))?;
+
+    let config: aiman_shared::EngineConfig = serde_json::from_value(config_value)
+        .map_err(|e| DashboardError::BenchmarkFailed(format!("invalid config: {e}")))?;
 
     // Fetch hardware info
     let (_, hardware_body): (_, serde_json::Value) = state
@@ -105,7 +116,7 @@ pub async fn run_benchmark(
 
     // Build llama-benchy arguments
     let mut args = vec![
-        "--api-base-url".to_string(),
+        "--base-url".to_string(),
         api_base_url.clone(),
     ];
 
@@ -116,17 +127,23 @@ pub async fn run_benchmark(
 
     if !payload.pp.is_empty() {
         args.push("--pp".to_string());
-        args.push(payload.pp.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(","));
+        for n in &payload.pp {
+            args.push(n.to_string());
+        }
     }
 
     if !payload.tg.is_empty() {
         args.push("--tg".to_string());
-        args.push(payload.tg.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(","));
+        for n in &payload.tg {
+            args.push(n.to_string());
+        }
     }
 
     if !payload.depth.is_empty() {
         args.push("--depth".to_string());
-        args.push(payload.depth.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(","));
+        for n in &payload.depth {
+            args.push(n.to_string());
+        }
     }
 
     if let Some(runs) = payload.runs {
@@ -136,16 +153,22 @@ pub async fn run_benchmark(
 
     if !payload.concurrency.is_empty() {
         args.push("--concurrency".to_string());
-        args.push(payload.concurrency.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(","));
+        for n in &payload.concurrency {
+            args.push(n.to_string());
+        }
     }
 
     if payload.prefix_caching == Some(true) {
-        args.push("--prefix-caching".to_string());
+        args.push("--enable-prefix-caching".to_string());
     }
 
     if let Some(ref mode) = payload.latency_mode {
         args.push("--latency-mode".to_string());
         args.push(mode.clone());
+    }
+
+    if payload.no_warmup == Some(true) {
+        args.push("--no-warmup".to_string());
     }
 
     // Run llama-benchy
@@ -176,7 +199,8 @@ pub async fn run_benchmark(
             runs: payload.runs.unwrap_or(1),
             concurrency: payload.concurrency,
             prefix_caching: payload.prefix_caching.unwrap_or(false),
-            latency_mode: payload.latency_mode.unwrap_or_else(|| "ttft".to_string()),
+            latency_mode: payload.latency_mode.unwrap_or_else(|| "api".to_string()),
+            no_warmup: payload.no_warmup.unwrap_or(false),
         },
         output,
     };

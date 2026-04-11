@@ -34,6 +34,14 @@
           </select>
         </label>
         <label>
+          <input v-model="form.visible" type="checkbox" />
+          Visible in Engines page
+        </label>
+        <label>
+          Description
+          <input v-model="form.description" type="text" placeholder="Optional description" />
+        </label>
+        <label>
           {{ form.engine_type === "Container" ? "Container runtime" : "Command" }}
           <input
             v-model="form.command"
@@ -113,6 +121,10 @@
             <input v-model.number="form.auto_restart_backoff_secs" type="number" min="1" />
           </label>
         </div>
+        <label v-if="mode === 'edit'">
+          Comments (internal notes)
+          <textarea v-model="form.comments" rows="3" placeholder="Experiment notes, observations, etc." />
+        </label>
         <div class="form-actions">
           <button
             v-if="mode === 'edit'"
@@ -202,6 +214,9 @@ const props = defineProps<{
     auto_restart_enabled: boolean;
     auto_restart_max_retries: number;
     auto_restart_backoff_secs: number;
+    visible: boolean;
+    description: string;
+    comments: string;
   };
   errors: string[];
   images: ContainerImage[];

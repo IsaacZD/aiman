@@ -48,6 +48,13 @@ export type EngineConfig = {
     pull?: boolean | null;
     remove?: boolean | null;
   } | null;
+  /// Whether this config should be displayed in the Engines page.
+  /// Defaults to true for backward compatibility.
+  visible?: boolean;
+  /// Short description displayed in the engine detail dialog.
+  description?: string;
+  /// Internal notes visible only in the edit dialog, for experiment records.
+  comments?: string;
 };
 
 export type ImageStatus = "NotReady" | "Preparing" | "Ready" | "Failed";
@@ -87,6 +94,7 @@ export type EngineItem = {
   host: Host;
   instance: EngineInstance;
   configName?: string | undefined;
+  visible?: boolean | undefined;
 };
 
 export type EnginesResult = {
@@ -154,6 +162,7 @@ export type BenchmarkSettings = {
   concurrency: number[];
   prefix_caching: boolean;
   latency_mode: string;
+  no_warmup?: boolean;
 };
 
 export type BenchmarkRecord = {

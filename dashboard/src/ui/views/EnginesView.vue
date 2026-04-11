@@ -39,6 +39,10 @@
         placeholder="Filter by engine or host name…"
         type="search"
       />
+      <label class="show-hidden-toggle">
+        <input type="checkbox" v-model="showHidden" />
+        Show hidden configs
+      </label>
       <span v-if="filterQuery.trim()" class="panel-sub" style="margin: 0">
         {{ filteredHosts.length === 0 ? 'No matches' : `${filteredHosts.length} host(s) match` }}
       </span>
@@ -114,32 +118,43 @@ defineEmits<{
 // ── filter state ─────────────────────────────────────────────────────────────
 
 const filterQuery = ref("");
+const showHidden = ref(false);
 
-// ── status counts ─────────────────────────────────────────────────────────────
+// ── status counts (based on filtered engines) ─────────────────────────────────
 
-const totalCount = computed(() => props.engines.length);
+const filteredEnginesFlat = computed(() => {
+  return Object.values(filteredEnginesByHost.value).flat();
+});
+
+const totalCount = computed(() => filteredEnginesFlat.value.length);
 const runningCount = computed(
-  () => props.engines.filter((e) => e.instance.status === "Running").length
+  () => filteredEnginesFlat.value.filter((e) => e.instance.status === "Running").length
 );
 const stoppedCount = computed(
-  () => props.engines.filter((e) => e.instance.status === "Stopped").length
+  () => filteredEnginesFlat.value.filter((e) => e.instance.status === "Stopped").length
 );
 const startingCount = computed(
-  () => props.engines.filter((e) => e.instance.status === "Starting").length
+  () => filteredEnginesFlat.value.filter((e) => e.instance.status === "Starting").length
 );
 
 // ── filtered views ────────────────────────────────────────────────────────────
 
 const filteredEnginesByHost = computed(() => {
   const q = filterQuery.value.trim().toLowerCase();
-  if (!q) return props.enginesByHost;
+  if (!q && showHidden.value) return props.enginesByHost;
   const result: Record<string, EngineItem[]> = {};
   for (const host of props.hosts) {
-    const filtered = (props.enginesByHost[host.id] ?? []).filter((e) => {
-      const name = (e.configName ?? "").toLowerCase();
-      const hostName = host.name.toLowerCase();
-      return name.includes(q) || hostName.includes(q);
-    });
+    let filtered = props.enginesByHost[host.id] ?? [];
+    if (!showHidden.value) {
+      filtered = filtered.filter((e) => e.visible !== false);
+    }
+    if (q) {
+      filtered = filtered.filter((e) => {
+        const name = (e.configName ?? "").toLowerCase();
+        const hostName = host.name.toLowerCase();
+        return name.includes(q) || hostName.includes(q);
+      });
+    }
     if (filtered.length) {
       result[host.id] = filtered;
     }

@@ -36,20 +36,23 @@ export function useEngines() {
   }
 
   function updateConfigNameMapForHost(hostId: string, hostConfigs: EngineConfig[]) {
-    const map: Record<string, string> = {};
+    const nameMap: Record<string, string> = {};
+    const visibleMap: Record<string, boolean> = {};
     for (const config of hostConfigs ?? []) {
-      map[config.id] = config.name;
+      nameMap[config.id] = config.name;
+      visibleMap[config.id] = config.visible ?? true;
     }
-    configNameByHost.value = { ...configNameByHost.value, [hostId]: map };
+    configNameByHost.value = { ...configNameByHost.value, [hostId]: nameMap };
     engines.value = engines.value.map((engine) => {
       if (engine.host.id !== hostId) {
         return engine;
       }
-      const configName = map[engine.instance.config_id];
-      if (configName === engine.configName) {
+      const configName = nameMap[engine.instance.config_id];
+      const visible = visibleMap[engine.instance.config_id];
+      if (configName === engine.configName && visible === engine.visible) {
         return engine;
       }
-      return { ...engine, configName };
+      return { ...engine, configName, visible };
     });
     rebuildEnginesByHost();
   }
@@ -70,7 +73,8 @@ export function useEngines() {
 
   async function refreshEngines(
     hosts: Host[],
-    configNameByHostMap: Record<string, Record<string, string>>
+    configNameByHostMap: Record<string, Record<string, string>>,
+    configVisibleByHostMap: Record<string, Record<string, boolean>>
   ) {
     const enginesRes = await fetch("/api/engines");
     if (!enginesRes.ok) {
@@ -90,7 +94,8 @@ export function useEngines() {
       }
       for (const instance of result.engines ?? []) {
         const configName = configNameByHostMap[result.host.id]?.[instance.config_id];
-        nextEngines.push({ host: result.host, instance, configName });
+        const visible = configVisibleByHostMap[result.host.id]?.[instance.config_id] ?? true;
+        nextEngines.push({ host: result.host, instance, configName, visible });
       }
     }
     engines.value = nextEngines;

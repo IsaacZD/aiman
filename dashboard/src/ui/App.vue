@@ -189,6 +189,16 @@
     @select-model="selectModelFromPicker"
   />
 
+  <BenchmarkModal
+    :show="showBenchmarkModal"
+    :target="benchmarkTarget"
+    :form="benchmarkForm"
+    :error="benchmarkModalError"
+    :running="benchmarkRunning"
+    @close="closeBenchmarkModal"
+    @submit="runBenchmark"
+  />
+
   <ImageModal
     :show="showImageModal"
     :mode="imageMode"
@@ -210,6 +220,7 @@ import AdminView from "./views/AdminView.vue";
 import EngineDetailModal from "./components/EngineDetailModal.vue";
 import HostModal from "./components/HostModal.vue";
 import ConfigModal from "./components/ConfigModal.vue";
+import BenchmarkModal from "./components/BenchmarkModal.vue";
 import ImageModal from "./components/ImageModal.vue";
 
 import { useEngines } from "./composables/useEngines";
@@ -489,8 +500,9 @@ async function refreshAll() {
       }
     });
 
-    // Load config names and hardware for each host in parallel.
+    // Load config names and visibility for each host in parallel.
     const nextConfigNameByHost: Record<string, Record<string, string>> = {};
+    const nextConfigVisibleByHost: Record<string, Record<string, boolean>> = {};
     const nextHardwareByHost: Record<string, import("./types").HardwareInfo | null> = {};
     const nextHardwareErrorsByHost: Record<string, string> = {};
     await Promise.all(
@@ -499,17 +511,22 @@ async function refreshAll() {
           const res = await fetch(`/api/hosts/${host.id}/configs`);
           if (!res.ok) {
             nextConfigNameByHost[host.id] = {};
+            nextConfigVisibleByHost[host.id] = {};
             return;
           }
           const body = (await res.json()) as { configs: EngineConfig[] };
-          const map: Record<string, string> = {};
+          const nameMap: Record<string, string> = {};
+          const visibleMap: Record<string, boolean> = {};
           for (const config of body.configs ?? []) {
-            map[config.id] = config.name;
+            nameMap[config.id] = config.name;
+            visibleMap[config.id] = config.visible ?? true; // Default to true for backward compat
           }
-          nextConfigNameByHost[host.id] = map;
+          nextConfigNameByHost[host.id] = nameMap;
+          nextConfigVisibleByHost[host.id] = visibleMap;
         } catch {
           // Ignore config load failures here; engines list can still render.
           nextConfigNameByHost[host.id] = {};
+          nextConfigVisibleByHost[host.id] = {};
         }
 
         try {
@@ -531,7 +548,7 @@ async function refreshAll() {
     hardwareByHost.value = nextHardwareByHost;
     hardwareErrorsByHost.value = nextHardwareErrorsByHost;
 
-    const ok = await refreshEngines(hosts.value, nextConfigNameByHost);
+    const ok = await refreshEngines(hosts.value, nextConfigNameByHost, nextConfigVisibleByHost);
     if (!ok) {
       return;
     }

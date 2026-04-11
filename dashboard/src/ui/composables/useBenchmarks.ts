@@ -86,12 +86,14 @@ export function useBenchmarks() {
     benchmarkModalError.value = null;
 
     const f = benchmarkForm.value;
+    const parseNums = (s: string) =>
+      s.split(",").map((v) => parseInt(v.trim(), 10)).filter((n) => !isNaN(n));
     const payload = {
-      pp: f.pp,
-      tg: f.tg,
-      depth: f.depth,
+      pp: parseNums(f.pp),
+      tg: parseNums(f.tg),
+      depth: parseNums(f.depth),
       runs: f.runs,
-      concurrency: f.concurrency,
+      concurrency: parseNums(f.concurrency),
       model: f.model.trim() || undefined,
       api_base_url: f.apiBaseUrl.trim() || undefined,
       api_key: f.apiKey.trim() || undefined,

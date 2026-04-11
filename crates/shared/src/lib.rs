@@ -37,6 +37,16 @@ pub struct EngineConfig {
     pub auto_restart: AutoRestart,
     #[serde(default)]
     pub container: Option<ContainerConfig>,
+    /// Whether this config should be displayed in the Engines page.
+    /// Defaults to true for backward compatibility with existing configs.
+    #[serde(default = "default_true")]
+    pub visible: bool,
+    /// Short description displayed in the engine detail dialog.
+    #[serde(default)]
+    pub description: String,
+    /// Internal notes visible only in the edit dialog, for experiment records.
+    #[serde(default)]
+    pub comments: String,
 }
 
 /// Environment variable injection for a process.
@@ -122,6 +132,29 @@ impl Default for AutoRestart {
             enabled: false,
             max_retries: 0,
             backoff_secs: 5,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            engine_type: EngineType::Custom,
+            command: String::new(),
+            args: Vec::new(),
+            env: Vec::new(),
+            working_dir: None,
+            auto_restart: AutoRestart::default(),
+            container: None,
+            visible: true,
+            description: String::new(),
+            comments: String::new(),
         }
     }
 }

@@ -38,6 +38,7 @@ pub struct BenchmarkPayload {
     pub concurrency: Vec<i32>,
     pub prefix_caching: Option<bool>,
     pub latency_mode: Option<String>,
+    pub no_warmup: Option<bool>,
 }
 
 /// Benchmark settings stored in the record.
@@ -52,6 +53,7 @@ pub struct BenchmarkSettings {
     pub concurrency: Vec<i32>,
     pub prefix_caching: bool,
     pub latency_mode: String,
+    pub no_warmup: bool,
 }
 
 /// Host snapshot included in benchmark records.

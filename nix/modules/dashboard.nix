@@ -109,7 +109,7 @@ in {
       description = "aiman dashboard server";
       wantedBy = ["multi-user.target"];
       after = ["network.target"];
-      path = with pkgs; [bash]; # python3Packages.llama-benchy
+      path = with pkgs; [bash llama-benchy];
       serviceConfig = {
         Type = "simple";
         User = cfg.user;

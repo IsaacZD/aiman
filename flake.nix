@@ -13,6 +13,7 @@
           aiman_agent = final.callPackage ./nix/aiman_agent.nix { };
           aiman_dashboard = final.callPackage ./nix/aiman_dashboard.nix { };
           aiman-dashboard-ui = final.callPackage ./nix/aiman-dashboard-ui.nix { };
+          llama-benchy = final.callPackage ./nix/llama-benchy.nix { };
         };
       };
     in
@@ -25,6 +26,7 @@
           aiman_agent = pkgs.aiman_agent;
           aiman_dashboard = pkgs.aiman_dashboard;
           aiman-dashboard-ui = pkgs.aiman-dashboard-ui;
+          llama-benchy = pkgs.llama-benchy;
           default = pkgs.aiman_agent;
         };
 
@@ -39,6 +41,7 @@
             pkg-config
             openssl
             nodejs_20
+            llama-benchy
           ];
 
           RUST_BACKTRACE = "1";
